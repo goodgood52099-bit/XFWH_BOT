@@ -2,10 +2,15 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# 1️⃣ 從環境變數讀取 token
+# 1️⃣ 取得 Token
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
 if not TOKEN:
-    raise ValueError("請在環境變數中設定 TELEGRAM_BOT_TOKEN")
+    # 如果沒有環境變數，提示手動輸入（方便本地測試）
+    TOKEN = input("請輸入你的 Telegram Bot Token: ").strip()
+
+if not TOKEN:
+    raise ValueError("Telegram Bot Token 尚未設定！程式終止。")
 
 # 2️⃣ /start 指令
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -19,7 +24,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 3️⃣ 處理按鈕事件
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # 結束 loading
+    await query.answer()
 
     data = query.data
 
