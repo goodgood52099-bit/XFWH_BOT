@@ -2,12 +2,12 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# 讀取 Token
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
-    TOKEN = input("請輸入你的 Telegram Bot Token: ").strip()
-if not TOKEN:
-    raise ValueError("Telegram Bot Token 尚未設定！程式終止。")
+    raise ValueError("請在 Zeabur 的 Environment Variables 設定 TELEGRAM_BOT_TOKEN")
+
+# 以下保持原本 async Telegram Bot 程式碼
+
 
 # /start 指令
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
