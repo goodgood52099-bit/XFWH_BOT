@@ -48,52 +48,33 @@ group_config = load_group_config()
 staff_group_id = group_config.get("staff_group_id")
 business_groups = set(group_config.get("business_groups", []))
 
-# -------------------------------
-# JSON 存取
-# -------------------------------
+# 設定服務員群組指令
+def register_group(chat_id, user_id, text):
+    global staff_group_id, business_groups, group_config
 
-def data_path_for(day): return os.path.join(DATA_DIR, f"{day}.json")
+    if text == "/set_staff_group" and user_id in ADMIN_IDS:
+        staff_group_id = chat_id
+        group_config["staff_group_id"] = chat_id
+        save_group_config(group_config)
+        send_message(chat_id, f"✅ 此群已設定為【服務員群組】\n群組 ID：`{chat_id}`")
+        send_main_menu(chat_id, "staff")
+        print(f"[INFO] Staff group set to {chat_id}")
+        return "staff"
 
-def ensure_today_file(workers=3):
-    today = datetime.now(TZ).date().isoformat()
-    path = data_path_for(today)
-    now = datetime.now(TZ)
-    if os.path.exists(path):
-        data = load_json_file(path)
-        if data.get("date") != today:
-            os.remove(path)
-    if not os.path.exists(path):
-        shifts = []
-        for h in range(13, 23):
-            shift_time = dt_time(h, 0)
-            shift_dt = datetime.combine(now.date(), shift_time).replace(tzinfo=TZ)
-            if shift_dt > now:
-                shifts.append({"time": f"{h:02d}:00", "limit": workers, "bookings": [], "in_progress": []})
-        save_json_file(path, {"date": today, "shifts": shifts, "候補":[]})
-    return path
+    if staff_group_id is None:
+        send_message(chat_id, "⚙️ 請管理員在服務員群輸入 /set_staff_group 完成初始設定。")
+        return None
 
-def load_json_file(path, default=None):
-    if not os.path.exists(path): return default or {}
-    with open(path, "r", encoding="utf-8") as f: return json.load(f)
+    if chat_id != staff_group_id and chat_id not in business_groups:
+        business_groups.add(chat_id)
+        group_config["business_groups"] = list(business_groups)
+        save_group_config(group_config)
+        send_message(chat_id, f"📋 已自動登錄此群為【業務群組】\n群組 ID：`{chat_id}`")
+        send_main_menu(chat_id, "business")
+        print(f"[INFO] New business group added: {chat_id}")
+        return "business"
 
-def save_json_file(path, data):
-    with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
-
-def find_shift(shifts, hhmm):
-    for s in shifts:
-        if s["time"] == hhmm: return s
     return None
-
-# -------------------------------
-# Telegram 發送
-# -------------------------------
-
-def send_request(method, payload): return requests.post(API_URL + method, json=payload).json()
-
-def send_message(chat_id, text, reply_markup=None):
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    if reply_markup: payload["reply_markup"] = reply_markup
-    return send_request("sendMessage", payload)
 
 # -------------------------------
 # 主選單與按鈕
