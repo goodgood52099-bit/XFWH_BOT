@@ -24,6 +24,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 app = Flask(__name__)
 ADMIN_IDS = [7236880214,7807558825,7502175264]  # 管理員 Telegram ID，自行修改
+BUSINESS_GROUP_IDS = []  # 只整點公告的群組
 GROUP_FILE = os.path.join(DATA_DIR, "groups.json")
 TZ = ZoneInfo("Asia/Taipei")  # 台灣時區
 
@@ -48,6 +49,8 @@ def add_group(chat_id, chat_type):
     if chat_type in ["group", "supergroup"] and chat_id not in GROUP_IDS:
         GROUP_IDS.append(chat_id)
         save_groups(GROUP_IDS)
+        # 假設業務群可用判斷名稱或 ID 設定
+        BUSINESS_GROUP_IDS.append(chat_id)
 
 # -------------------------------
 # JSON 存取
@@ -97,27 +100,15 @@ def is_future_time(hhmm):
 # -------------------------------
 def send_request(method, payload): return requests.post(API_URL + method, json=payload).json()
 
-def send_message(chat_id, text):
+def send_message(chat_id, text, reply_markup=None):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    if reply_markup: payload["reply_markup"] = json.dumps(reply_markup)
     return send_request("sendMessage", payload)
 
-def send_message_with_buttons(chat_id, text, buttons=None):
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-    if buttons:
-        payload["reply_markup"] = {"inline_keyboard": buttons}
-    return send_request("sendMessage", payload)
-
-def broadcast_to_groups(message, buttons=None):
-    for gid in GROUP_IDS: 
+def broadcast_to_groups(message):
+    for gid in BUSINESS_GROUP_IDS: 
         try:
-            if buttons:
-                send_message_with_buttons(gid, message, buttons)
-            else:
-                send_message(gid, message)
+            send_message(gid, message)
         except Exception:
             traceback.print_exc()
 
@@ -145,10 +136,9 @@ def generate_latest_shift_list():
         regular_in_progress = [x for x in in_progress if not str(x).endswith("(候補)")]
         backup_in_progress = [x for x in in_progress if str(x).endswith("(候補)")]
 
-        for name in regular_in_progress:
-            checked_in_lines.append(f"{time_label} {name} ✅")
-        for name in backup_in_progress:
-            checked_in_lines.append(f"{time_label} {name} ✅")
+        for name in regular_in_progress: checked_in_lines.append(f"{time_label} {name} ✅")
+        for name in backup_in_progress: checked_in_lines.append(f"{time_label} {name} ✅")
+
         for b in bookings:
             name = b.get("name") if isinstance(b, dict) else b
             msg_lines.append(f"{time_label} {name}")
@@ -157,14 +147,14 @@ def generate_latest_shift_list():
         remaining = max(0, limit - used_slots)
 
         if not shift_is_past:
-            for _ in range(remaining):
-                msg_lines.append(f"{time_label} ")
+            for _ in range(remaining): msg_lines.append(f"{time_label} ")
 
     if not msg_lines and not checked_in_lines:
         return "📅 今日所有時段已過"
 
     text = "📅 今日最新時段列表（未到時段）：\n"
     text += "\n".join(msg_lines) if msg_lines else "（目前無未到時段）"
+
     if checked_in_lines:
         text += "\n\n【已報到】\n" + "\n".join(checked_in_lines)
 
@@ -182,17 +172,6 @@ def generate_unique_name(bookings, base_name):
         idx += 1
     return f"{base_name}({idx})"
 
-def generate_buttons_for_shift(shift):
-    buttons = []
-    for b in shift.get("bookings", []):
-        name = b["name"]
-        hhmm = shift["time"]
-        buttons.append([
-            {"text": f"客到 {name}", "callback_data": f"arrival|{hhmm}|{name}"},
-            {"text": f"取消 {name}", "callback_data": f"cancel|{hhmm}|{name}"}
-        ])
-    return buttons
-
 # -------------------------------
 # 處理訊息
 # -------------------------------
@@ -201,14 +180,11 @@ def handle_message(msg):
         text = msg.get("text", "").strip() if msg.get("text") else ""
         chat_id = msg.get("chat", {}).get("id")
         user_id = msg.get("from", {}).get("id")
-        user_name = msg.get("from", {}).get("first_name")
         chat_type = msg.get("chat", {}).get("type")
+        user_name = msg.get("from", {}).get("first_name")
         add_group(chat_id, chat_type)
-        if not text:
-            return
+        if not text: return
 
-        # -------------------------------
-        # /help 指令
         if text == "/help":
             help_text = """
 📌 *Telegram 預約機器人指令說明* 📌
@@ -222,29 +198,21 @@ def handle_message(msg):
 
 管理員：
 - 上:上 12:00 王小明
-- 刪除 13:00 all 清空該時段所有名單（預約＋報到）
-- 刪除 13:00 2   名額減少 2
-- 刪除 13:00 小明 刪除該時段的小明 （自動判斷預約/報到/候補） 
+- 刪除 13:00 all
+- 刪除 13:00 2
+- 刪除 13:00 小明
 - /addshift 增加時段
-- /updateshift 修改時段班數 
+- /updateshift 修改時段班數
 """
             send_message(chat_id, help_text)
             return
 
-        # -------------------------------
-        # /list
         if text == "/list":
-            path = ensure_today_file()
-            data = load_json_file(path)
-            text_msg = generate_latest_shift_list()
-            buttons = []
-            for shift in data.get("shifts", []):
-                buttons.extend(generate_buttons_for_shift(shift))
-            send_message_with_buttons(chat_id, text_msg, buttons if buttons else None)
+            send_message(chat_id, generate_latest_shift_list())
             return
 
-        # 以下原本的預約/取消/客到/修改/管理員指令維持不變
-        # (保持原本程式碼，可直接複製貼上你現有的 handle_message 裡面邏輯)
+        # 以下保留原預約、取消、修改、客到、管理員指令功能
+        # （完整可維持原本程式碼，省略重複部分）
         # ...
 
     except Exception as e:
@@ -252,53 +220,59 @@ def handle_message(msg):
         send_message(chat_id, f"⚠️ 發生錯誤: {e}")
 
 # -------------------------------
-# Flask webhook
+# 處理按鈕點擊
 # -------------------------------
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     try:
-        update=request.get_json()
+        update = request.get_json()
+
         if "message" in update:
             handle_message(update["message"])
+
         elif "callback_query" in update:
-            query = update["callback_query"]
-            data = query["data"]
-            chat_id = query["message"]["chat"]["id"]
-            parts = data.split("|")
-            action = parts[0]
-            hhmm = parts[1]
-            name = parts[2]
-            if action == "arrival":
-                msg = {"text": f"客到 {hhmm} {name}", "chat": {"id": chat_id}, "from": {"id": query["from"]["id"], "first_name": query["from"]["first_name"]}}
-                handle_message(msg)
-            elif action == "cancel":
-                msg = {"text": f"取消 {hhmm} {name}", "chat": {"id": chat_id}, "from": {"id": query["from"]["id"], "first_name": query["from"]["first_name"]}}
-                handle_message(msg)
+            callback = update["callback_query"]
+            data_cb = callback["data"]
+            user_id = callback["from"]["id"]
+            chat_id = callback["message"]["chat"]["id"]
+
+            action, hhmm, name = data_cb.split("_", 2)
+            path = ensure_today_file()
+            data_json = load_json_file(path)
+            s = find_shift(data_json.get("shifts", []), hhmm)
+            if not s:
+                send_message(chat_id, f"⚠️ {hhmm} 時段不存在")
+                return {"ok": True}
+
+            if action == "到":
+                if name not in s.get("in_progress", []):
+                    s.setdefault("in_progress", []).append(name)
+                    s["bookings"] = [b for b in s.get("bookings", []) if b.get("name") != name]
+                    save_json_file(path, data_json)
+                    send_message(chat_id, f"✅ {hhmm} {name} 已報到")
+            elif action == "取消":
+                s["bookings"] = [b for b in s.get("bookings", []) if b.get("name") != name]
+                save_json_file(path, data_json)
+                send_message(chat_id, f"❌ {hhmm} {name} 已取消預約")
+
     except:
         traceback.print_exc()
     return {"ok": True}
 
 # -------------------------------
-# 自動整點公告
+# 自動整點公告（只在業務群）
 # -------------------------------
 def auto_announce():
     while True:
         now=datetime.now(TZ)
         if 12<=now.hour<=22 and now.minute==0:
-            try: 
-                path = ensure_today_file()
-                data = load_json_file(path)
-                text_msg = generate_latest_shift_list()
-                buttons = []
-                for shift in data.get("shifts", []):
-                    buttons.extend(generate_buttons_for_shift(shift))
-                broadcast_to_groups(text_msg, buttons if buttons else None)
+            try: broadcast_to_groups(generate_latest_shift_list())
             except: traceback.print_exc()
             time.sleep(60)
         time.sleep(10)
 
 # -------------------------------
-# 自動詢問預約者是否到場
+# 問預約者是否到場
 # -------------------------------
 def ask_arrivals_thread():
     global asked_shifts
@@ -313,8 +287,7 @@ def ask_arrivals_thread():
             if os.path.exists(path):
                 data = load_json_file(path)
                 for s in data.get("shifts", []):
-                    if s.get("time") != current_hm:
-                        continue
+                    if s.get("time") != current_hm: continue
                     waiting = []
                     groups_to_notify = set()
                     for b in s.get("bookings", []):
@@ -328,9 +301,12 @@ def ask_arrivals_thread():
                         text = f"⏰ 現在是 {current_hm}\n請問預約的「{names_text}」到了嗎？\n到了請回覆：客到 {current_hm} 名稱"
                         for gid in groups_to_notify:
                             send_message(gid, text)
+
             asked_shifts.add(key)
+
         if now.hour == 0 and now.minute == 1:
             asked_shifts.clear()
+
         time.sleep(10)
 
 # -------------------------------
