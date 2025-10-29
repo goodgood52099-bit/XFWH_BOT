@@ -13,7 +13,7 @@ except ImportError:
 
 app = Flask(__name__)
 TZ = ZoneInfo("Asia/Taipei")
-now = datetime.now(TZ)
+
 # --- 環境變數 ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",")
@@ -23,7 +23,7 @@ PORT = int(os.environ.get("PORT", 5000))
 STAFF_GROUP_IDS = []
 BUSINESS_GROUP_IDS = []
 
-# --- 預約資料結構 ---
+# --- 預約資料 ---
 appointments = {}  # {"HHMM": [{"name": str, "amount": int, "status": reserved/checkedin, "customer": {}, "staff": [], "actual_amount": int, "unsold_reason": str, "business_group_id": int}]}
 
 # =========================
@@ -52,9 +52,9 @@ def generate_unique_name(bookings, base_name):
         idx += 1
     return f"{base_name}({idx})"
 
-# -------------------------------
+# =========================
 # 生成最新時段列表
-# -------------------------------
+# =========================
 def generate_latest_shift_list():
     msg_lines = []
     checked_in_lines = []
@@ -67,13 +67,8 @@ def generate_latest_shift_list():
 
             if a.get("status") == "checkedin":
                 checked_in_lines.append(f"{hhmm} {a['name']} ✅")
-            elif a.get("status") == "reserved":
-                msg_lines.append(f"{hhmm} {a['name']}")
-
-            remaining = a.get("limit",1) - len([x for x in appointments[hhmm] if x.get("status")=="reserved"])
-            if remaining > 0 and not shift_is_past:
-                for _ in range(remaining):
-                    msg_lines.append(f"{hhmm} ")
+            elif a.get("status") == "reserved" or a.get("name","") == "":
+                msg_lines.append(f"{hhmm} {a.get('name','')}")
 
     if not msg_lines and not checked_in_lines:
         return "📅 今日所有時段已過"
@@ -84,16 +79,13 @@ def generate_latest_shift_list():
         text += "\n\n【已報到】\n" + "\n".join(checked_in_lines)
     return text
 
-# -------------------------------
-# 發送最新時段列表
-# -------------------------------
 def send_latest_slots(chat_id):
     text = generate_latest_shift_list()
     send_message(chat_id, text)
 
-# -------------------------------
+# =========================
 # 業務群操作按鈕（中文，一行兩個）
-# -------------------------------
+# =========================
 def send_business_menu(chat_id):
     reply_markup = {
         "inline_keyboard": [
@@ -105,7 +97,7 @@ def send_business_menu(chat_id):
     send_message(chat_id, "請選擇操作功能：", reply_markup)
 
 # =========================
-# 核心流程：公告、詢問、每日重置
+# 排程：整點公告、詢問客人、每日重置
 # =========================
 def announce_latest_slots():
     while True:
@@ -125,15 +117,11 @@ def ask_clients_checkin():
             if hhmm < now_hhmm:
                 continue
             for a in appointments[hhmm]:
-                if a["status"] == "reserved":
-                    reply_markup = {"inline_keyboard": [[
-                        create_inline_button("報到", f"checkin:{hhmm}|{a['name']}|{a['amount']}")
-                    ]]}
+                if a.get("status") == "reserved":
+                    reply_markup = {"inline_keyboard":[[create_inline_button("報到", f"checkin:{hhmm}|{a['name']}|{a['amount']}")]]}
                     business_gid = a.get("business_group_id")
                     if business_gid:
-                        send_message(business_gid,
-                                     f"現在是 {now_hhmm}，請問預約 {hhmm} 的 {a['name']} 到了嗎？",
-                                     reply_markup=reply_markup)
+                        send_message(business_gid, f"現在是 {now_hhmm}，請問預約 {hhmm} 的 {a['name']} 到了嗎？", reply_markup=reply_markup)
 
 def daily_reset_appointments():
     while True:
@@ -145,7 +133,7 @@ def daily_reset_appointments():
         appointments.clear()
         for hour in range(13, 23):
             hhmm = f"{hour:02d}00"
-            appointments[hhmm] = []
+            appointments[hhmm] = [{"name": "", "status": "reserved", "amount": 1}]
 
         for gid in BUSINESS_GROUP_IDS:
             send_latest_slots(gid)
@@ -175,6 +163,7 @@ def handle_message(message):
         send_message(chat_id, "⚠️ 只能在業務群或服務員群操作此功能")
         return
 
+    # 處理客資輸入
     if " / " in text:
         try:
             parts = text.split("/")
@@ -187,6 +176,7 @@ def handle_message(message):
                         if staff_name not in a["staff"]:
                             a["staff"].append(staff_name)
                         a["awaiting_customer"] = False
+                        # 發送服務員群
                         for gid in STAFF_GROUP_IDS:
                             send_message(gid,
                                          f"{hhmm} – {a['name']} / {a['amount']}\n客稱年紀：{customer_info}\n服務人員：{staff_name}",
@@ -196,6 +186,7 @@ def handle_message(message):
                                              [create_inline_button("修改", f"modify:{hhmm}|{a['name']}"),
                                               create_inline_button("未消", f"unsold:{hhmm}|{a['name']}")]
                                          ]})
+                        # 通知原業務群
                         business_gid = a.get("business_group_id")
                         if business_gid:
                             send_message(business_gid, f"{a['name']} / {customer_info} / {staff_name}")
@@ -237,10 +228,13 @@ def handle_callback(callback):
         cmd = key
         if cmd == "reserve":
             send_message(chat_id, "請選擇時段及輸入業務名稱與金額")
+            broadcast_latest_to_others(chat_id)
         elif cmd == "modify":
             send_message(chat_id, "請選擇要修改的預約")
+            broadcast_latest_to_others(chat_id)
         elif cmd == "cancel":
             send_message(chat_id, "請選擇要取消的預約")
+            broadcast_latest_to_others(chat_id)
         elif cmd == "view":
             send_latest_slots(chat_id)
         elif cmd == "checkin":
@@ -248,9 +242,16 @@ def handle_callback(callback):
 
     elif action == "checkin":
         hhmm, name, amount = key.split("|")
-        for gid in BUSINESS_GROUP_IDS:
-            send_message(gid, f"上 – {hhmm} – {name}")
-        # 服務員群按鈕：輸入客資 / 未消
+        # 只通知原業務群
+        business_gid = None
+        for a in appointments.get(hhmm, []):
+            if a["name"] == name:
+                business_gid = a.get("business_group_id")
+                break
+        if business_gid:
+            send_message(business_gid, f"上 – {hhmm} – {name}")
+
+        # 回覆服務員群，附按鈕
         reply_markup = {"inline_keyboard":[
             [create_inline_button("輸入客資", f"input_customer:{hhmm}|{name}"),
              create_inline_button("未消", f"unsold:{hhmm}|{name}")]
@@ -281,7 +282,15 @@ def handle_callback(callback):
                     send_message(chat_id, "請重新輸入客稱、年紀、服務人員（格式：客小美 28 / 小張）")
                 
                 if business_gid:
-                    send_message(business_gid, f"服務員操作通知 – {hhmm} – {a['name']} / {a.get('amount', '')}")
+                    send_message(business_gid, f"服務員操作通知 – {hhmm} – {a['name']} / {a.get('amount','')}")
+
+# =========================
+# 廣播給其他業務群最新時段
+# =========================
+def broadcast_latest_to_others(origin_chat_id):
+    for gid in BUSINESS_GROUP_IDS:
+        if gid != origin_chat_id:
+            send_latest_slots(gid)
 
 # =========================
 # Flask Webhook
@@ -299,15 +308,12 @@ def webhook():
     return "OK"
 
 # =========================
-# 啟動整點公告與每日重置排程
+# 啟動排程
 # =========================
 def start_announcement_thread():
-    t1 = threading.Thread(target=announce_latest_slots, daemon=True)
-    t1.start()
-    t2 = threading.Thread(target=ask_clients_checkin, daemon=True)
-    t2.start()
-    t3 = threading.Thread(target=daily_reset_appointments, daemon=True)
-    t3.start()
+    threading.Thread(target=announce_latest_slots, daemon=True).start()
+    threading.Thread(target=ask_clients_checkin, daemon=True).start()
+    threading.Thread(target=daily_reset_appointments, daemon=True).start()
 
 # =========================
 # 主程式
