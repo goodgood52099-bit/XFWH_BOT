@@ -251,6 +251,10 @@ def start_announcement_thread():
     t2.start()
 
 # --- 主程式 ---
+@app.route("/", methods=["GET"])
+def home():
+    return "Bot is running ✅"
+
 if __name__ == "__main__":
     start_announcement_thread()
     app.run(host="0.0.0.0", port=PORT)
