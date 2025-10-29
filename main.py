@@ -1,41 +1,56 @@
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+import requests
+from flask import Flask, request
 
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("請在 Zeabur 的 Environment Variables 設定 TELEGRAM_BOT_TOKEN")
+TOKEN = os.environ.get("BOT_TOKEN")  # 你的 Telegram Bot Token
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("➕ 新增", callback_data="add")],
-        [InlineKeyboardButton("✏️ 修改", callback_data="edit")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("請選擇操作：", reply_markup=reply_markup)
+app = Flask(__name__)
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
+# 顯示一個按鈕
+@app.route("/", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
 
-    if data == "add":
-        await query.edit_message_text("✅ 你選擇了【新增】功能")
-    elif data == "edit":
-        keyboard = [[InlineKeyboardButton("🔙 返回", callback_data="back")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("📝 你選擇了【修改】功能", reply_markup=reply_markup)
-    elif data == "back":
-        keyboard = [
-            [InlineKeyboardButton("➕ 新增", callback_data="add")],
-            [InlineKeyboardButton("✏️ 修改", callback_data="edit")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("請選擇操作：", reply_markup=reply_markup)
+        if text == "/start":
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "報到 ✅", "callback_data": "checkin"}],
+                    [{"text": "取消 ❌", "callback_data": "cancel"}]
+                ]
+            }
+            requests.post(f"{BASE_URL}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": "請選擇操作：",
+                "reply_markup": keyboard
+            })
+    elif "callback_query" in data:
+        callback = data["callback_query"]
+        chat_id = callback["message"]["chat"]["id"]
+        query_data = callback["data"]
+
+        if query_data == "checkin":
+            text = "你已成功報到 ✅"
+        elif query_data == "cancel":
+            text = "已取消報到 ❌"
+        else:
+            text = "未知指令"
+
+        requests.post(f"{BASE_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": text
+        })
+
+    return "OK", 200
+
+
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot is running."
+
 
 if __name__ == "__main__":
-    print("🤖 Bot 啟動中...")
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.run_polling()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
