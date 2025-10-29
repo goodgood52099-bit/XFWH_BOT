@@ -19,7 +19,7 @@ STAFF_GROUP_IDS = []       # 服務員群
 BUSINESS_GROUP_IDS = []    # 業務群
 
 # --- 預約資料 ---
-appointments = {}  # {"HHMM": [{"name": str, "amount": int, "status": reserved/checkedin, "customer": {}, "staff": [], "actual_amount": int, "unsold_reason": str}]}
+appointments = {}  # {"HHMM": [{"name": str, "amount": int, "status": reserved/checkedin, "customer": {}, "staff": [], "actual_amount": int, "unsold_reason": str, "business_group_id": int}]}
 
 # --- 工具函數 ---
 def send_message(chat_id, text, reply_markup=None):
@@ -29,7 +29,7 @@ def send_message(chat_id, text, reply_markup=None):
         payload["reply_markup"] = json.dumps(reply_markup)
     try:
         r = requests.post(url, data=payload)
-        print(r.text)  # 印出回傳訊息方便除錯
+        print(r.text)
     except Exception as e:
         print("Send message error:", e)
 
@@ -89,9 +89,9 @@ def ask_clients_checkin():
                     reply_markup = {"inline_keyboard": [[
                         create_inline_button("報到", f"checkin:{hhmm}|{a['name']}|{a['amount']}")
                     ]]}
-
-                    for gid in BUSINESS_GROUP_IDS:
-                        send_message(gid,
+                    business_gid = a.get("business_group_id")
+                    if business_gid:
+                        send_message(business_gid,
                                      f"現在是 {now_hhmm}，請問預約 {hhmm} 的 {a['name']} 到了嗎？",
                                      reply_markup=reply_markup)
 
@@ -136,6 +136,7 @@ def handle_message(message):
                         if staff_name not in a["staff"]:
                             a["staff"].append(staff_name)
                         a["awaiting_customer"] = False
+
                         # 發送服務員群
                         for gid in STAFF_GROUP_IDS:
                             send_message(gid,
@@ -145,9 +146,10 @@ def handle_message(message):
                                              create_inline_button("完成服務", f"complete:{hhmm}|{a['name']}"),
                                              create_inline_button("修改", f"modify:{hhmm}|{a['name']}")
                                          ]]})
-                        # 發送業務群
-                        for gid in BUSINESS_GROUP_IDS:
-                            send_message(gid, f"{a['name']} / {customer_info} / {staff_name}")
+                        # 只通知該預約所屬業務群
+                        business_gid = a.get("business_group_id")
+                        if business_gid:
+                            send_message(business_gid, f"{a['name']} / {customer_info} / {staff_name}")
                         return
         except:
             pass
@@ -162,8 +164,9 @@ def handle_message(message):
                     a["awaiting_unsold"] = False
                     for gid in STAFF_GROUP_IDS:
                         send_message(gid, f"已標記為未消 – 原因：{reason}")
-                    for gid in BUSINESS_GROUP_IDS:
-                        send_message(gid, f"{a['name']} / 原因：{reason}")
+                    business_gid = a.get("business_group_id")
+                    if business_gid:
+                        send_message(business_gid, f"{a['name']} / 原因：{reason}")
                     return
 
 # --- 處理按鈕回調 ---
@@ -198,36 +201,33 @@ def handle_callback(callback):
         for gid in BUSINESS_GROUP_IDS:
             send_message(gid, f"上 – {hhmm} – {name} / {amount}")
         send_message(chat_id, "已通知業務群")
-    elif action == "input_customer":
-        hhmm, name, amount = key.split("|")
+    elif action in ["input_customer", "unsold", "double", "complete", "modify"]:
+        # 找出對應預約
+        hhmm, *rest = key.split("|")
+        name = rest[0]
+        amount = int(rest[1]) if len(rest) > 1 else None
         for a in appointments.get(hhmm, []):
-            if a["name"] == name and a["amount"] == int(amount):
-                a["awaiting_customer"] = True
-        send_message(chat_id, "請輸入客稱、年紀、服務人員（格式：客小美 28 / 小張）")
-    elif action == "unsold":
-        hhmm, name, amount = key.split("|")
-        for a in appointments.get(hhmm, []):
-            if a["name"] == name and a["amount"] == int(amount):
-                a["awaiting_unsold"] = True
-        send_message(chat_id, "請輸入原因（格式：原因：XXXX）")
-    elif action == "double":
-        hhmm, name = key.split("|")
-        for a in appointments.get(hhmm, []):
-            if a["name"] == name:
-                a["awaiting_double"] = True
-        send_message(chat_id, "請輸入另一服務人員名稱（不可重複）")
-    elif action == "complete":
-        hhmm, name = key.split("|")
-        for a in appointments.get(hhmm, []):
-            if a["name"] == name:
-                a["awaiting_complete"] = True
-        send_message(chat_id, "請輸入實收金額（數字）")
-    elif action == "modify":
-        hhmm, name = key.split("|")
-        for a in appointments.get(hhmm, []):
-            if a["name"] == name:
-                a["awaiting_customer"] = True
-        send_message(chat_id, "請重新輸入客稱、年紀、服務人員（格式：客小美 28 / 小張）")
+            if a["name"] == name and (amount is None or a["amount"] == amount):
+                business_gid = a.get("business_group_id")
+                if action == "input_customer":
+                    a["awaiting_customer"] = True
+                    send_message(chat_id, "請輸入客稱、年紀、服務人員（格式：客小美 28 / 小張）")
+                elif action == "unsold":
+                    a["awaiting_unsold"] = True
+                    send_message(chat_id, "請輸入原因（格式：原因：XXXX）")
+                elif action == "double":
+                    a["awaiting_double"] = True
+                    send_message(chat_id, "請輸入另一服務人員名稱（不可重複）")
+                elif action == "complete":
+                    a["awaiting_complete"] = True
+                    send_message(chat_id, "請輸入實收金額（數字）")
+                elif action == "modify":
+                    a["awaiting_customer"] = True
+                    send_message(chat_id, "請重新輸入客稱、年紀、服務人員（格式：客小美 28 / 小張）")
+                
+                # --- 僅通知該預約業務群 ---
+                if business_gid:
+                    send_message(business_gid, f"服務員操作通知 – {hhmm} – {a['name']} / {a['amount']}")
 
 # --- Flask Webhook ---
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
