@@ -13,7 +13,7 @@ except ImportError:
 
 app = Flask(__name__)
 TZ = ZoneInfo("Asia/Taipei")
-
+now = datetime.now(TZ)
 # --- 環境變數 ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",")
