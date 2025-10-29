@@ -2,23 +2,24 @@ import os
 import requests
 from flask import Flask, request
 
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.environ.get("BOT_TOKEN")  # 在 Zeabur 環境變數中設置
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 app = Flask(__name__)
 
-# Webhook 入口
+# Webhook 入口，處理 Telegram 訊息
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print(data)  # 日誌中可以看到 Telegram 傳來的資料（測試用）
+    print(data)  # Zeabur logs 會看到訊息內容，用於測試 webhook
 
-    # 收到一般訊息
+    # 收到訊息
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "").lower()
 
-        if text == "/start":
+        # 判斷 /start 或 /start@BotUsername
+        if text.startswith("/start"):
             keyboard = {
                 "inline_keyboard": [
                     [{"text": "報到 ✅", "callback_data": "checkin"}],
@@ -31,7 +32,7 @@ def webhook():
                 "reply_markup": keyboard
             })
         else:
-            # 測試用回覆，確保 webhook 收到訊息
+            # 測試 webhook，可刪除
             requests.post(f"{BASE_URL}/sendMessage", json={
                 "chat_id": chat_id,
                 "text": f"收到訊息：{text}"
