@@ -14,9 +14,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",")
 PORT = int(os.environ.get("PORT", 5000))
 
-# --- 群組設定 ---
-STAFF_GROUP_ID = None
-BUSINESS_GROUP_ID = None  # 業務群只支援單一群組操作
+# --- 群組設定（支援多群組） ---
+STAFF_GROUP_IDS = []       # 服務員群
+BUSINESS_GROUP_IDS = []    # 業務群
 
 # --- 預約資料 ---
 appointments = {}  # {"HHMM": [{"name": str, "amount": int, "status": reserved/checkedin, "customer": {}, "staff": [], "actual_amount": int, "unsold_reason": str}]}
@@ -28,7 +28,8 @@ def send_message(chat_id, text, reply_markup=None):
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
     try:
-        requests.post(url, data=payload)
+        r = requests.post(url, data=payload)
+        print(r.text)  # 印出回傳訊息方便除錯
     except Exception as e:
         print("Send message error:", e)
 
@@ -70,8 +71,8 @@ def announce_latest_slots():
         now = datetime.now()
         next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         time.sleep((next_hour - now).total_seconds())
-        if BUSINESS_GROUP_ID:
-            send_latest_slots(BUSINESS_GROUP_ID)
+        for gid in BUSINESS_GROUP_IDS:
+            send_latest_slots(gid)
 
 # --- 每整點詢問客人到達 ---
 def ask_clients_checkin():
@@ -88,13 +89,14 @@ def ask_clients_checkin():
                     reply_markup = {"inline_keyboard": [[
                         create_inline_button("報到", f"checkin:{hhmm}|{a['name']}|{a['amount']}")
                     ]]}
-                    send_message(BUSINESS_GROUP_ID,
-                                 f"現在是 {now_hhmm}，請問預約 {hhmm} 的 {a['name']} 到了嗎？",
-                                 reply_markup=reply_markup)
+
+                    for gid in BUSINESS_GROUP_IDS:
+                        send_message(gid,
+                                     f"現在是 {now_hhmm}，請問預約 {hhmm} 的 {a['name']} 到了嗎？",
+                                     reply_markup=reply_markup)
 
 # --- 處理文字訊息 ---
 def handle_message(message):
-    global STAFF_GROUP_ID, BUSINESS_GROUP_ID
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
     user_id = str(message["from"]["id"])
@@ -104,22 +106,21 @@ def handle_message(message):
         if user_id not in ADMIN_IDS:
             send_message(chat_id, "你不是管理員，無法設定服務員群。")
             return
-        global STAFF_GROUP_ID
-        STAFF_GROUP_ID = chat_id
+        if chat_id not in STAFF_GROUP_IDS:
+            STAFF_GROUP_IDS.append(chat_id)
         send_message(chat_id, f"已設定本群為服務員群：{chat_id}")
         return
 
-    # 業務群判斷
-    global BUSINESS_GROUP_ID
-    if BUSINESS_GROUP_ID is None:
-        BUSINESS_GROUP_ID = chat_id
-        send_message(chat_id, f"已自動設定本群為業務群：{chat_id}")
+    # 自動加入業務群
+    if chat_id not in BUSINESS_GROUP_IDS:
+        BUSINESS_GROUP_IDS.append(chat_id)
         send_business_menu(chat_id)
+        send_message(chat_id, f"已將本群加入業務群列表：{chat_id}")
         return
 
-    # 業務群操作限制
-    if chat_id != BUSINESS_GROUP_ID and STAFF_GROUP_ID != chat_id:
-        send_message(chat_id, "⚠️ 只能在本業務群操作預約或修改")
+    # 限制操作權限
+    if chat_id not in BUSINESS_GROUP_IDS and chat_id not in STAFF_GROUP_IDS:
+        send_message(chat_id, "⚠️ 只能在業務群或服務員群操作此功能")
         return
 
     # 處理客資輸入
@@ -132,16 +133,21 @@ def handle_message(message):
                 for a in lst:
                     if a.get("awaiting_customer", False):
                         a["customer"] = customer_info
-                        a["staff"].append(staff_name)
+                        if staff_name not in a["staff"]:
+                            a["staff"].append(staff_name)
                         a["awaiting_customer"] = False
-                        send_message(STAFF_GROUP_ID,
-                                     f"{hhmm} – {a['name']} / {a['amount']}\n客稱年紀：{customer_info}\n服務人員：{staff_name}",
-                                     reply_markup={"inline_keyboard":[[
-                                         create_inline_button("雙", f"double:{hhmm}|{a['name']}"),
-                                         create_inline_button("完成服務", f"complete:{hhmm}|{a['name']}"),
-                                         create_inline_button("修改", f"modify:{hhmm}|{a['name']}")
-                                     ]]})
-                        send_message(BUSINESS_GROUP_ID, f"{a['name']} / {customer_info} / {staff_name}")
+                        # 發送服務員群
+                        for gid in STAFF_GROUP_IDS:
+                            send_message(gid,
+                                         f"{hhmm} – {a['name']} / {a['amount']}\n客稱年紀：{customer_info}\n服務人員：{staff_name}",
+                                         reply_markup={"inline_keyboard":[[
+                                             create_inline_button("雙", f"double:{hhmm}|{a['name']}"),
+                                             create_inline_button("完成服務", f"complete:{hhmm}|{a['name']}"),
+                                             create_inline_button("修改", f"modify:{hhmm}|{a['name']}")
+                                         ]]})
+                        # 發送業務群
+                        for gid in BUSINESS_GROUP_IDS:
+                            send_message(gid, f"{a['name']} / {customer_info} / {staff_name}")
                         return
         except:
             pass
@@ -154,8 +160,10 @@ def handle_message(message):
                 if a.get("awaiting_unsold", False):
                     a["unsold_reason"] = reason
                     a["awaiting_unsold"] = False
-                    send_message(STAFF_GROUP_ID, f"已標記為未消 – 原因：{reason}")
-                    send_message(BUSINESS_GROUP_ID, f"{a['name']} / 原因：{reason}")
+                    for gid in STAFF_GROUP_IDS:
+                        send_message(gid, f"已標記為未消 – 原因：{reason}")
+                    for gid in BUSINESS_GROUP_IDS:
+                        send_message(gid, f"{a['name']} / 原因：{reason}")
                     return
 
 # --- 處理按鈕回調 ---
@@ -164,9 +172,9 @@ def handle_callback(callback):
     message = callback["message"]
     chat_id = message["chat"]["id"]
 
-    # 業務群操作限制
-    if chat_id != BUSINESS_GROUP_ID and STAFF_GROUP_ID != chat_id:
-        send_message(chat_id, "⚠️ 只能在本業務群操作此功能")
+    # 限制操作權限
+    if chat_id not in BUSINESS_GROUP_IDS and chat_id not in STAFF_GROUP_IDS:
+        send_message(chat_id, "⚠️ 只能在業務群或服務員群操作此功能")
         return
 
     parts = data.split(":")
@@ -187,7 +195,8 @@ def handle_callback(callback):
             send_message(chat_id, "請選擇報到的客人")
     elif action == "checkin":
         hhmm, name, amount = key.split("|")
-        send_message(BUSINESS_GROUP_ID, f"上 – {hhmm} – {name} / {amount}")
+        for gid in BUSINESS_GROUP_IDS:
+            send_message(gid, f"上 – {hhmm} – {name} / {amount}")
         send_message(chat_id, "已通知業務群")
     elif action == "input_customer":
         hhmm, name, amount = key.split("|")
@@ -203,32 +212,22 @@ def handle_callback(callback):
         send_message(chat_id, "請輸入原因（格式：原因：XXXX）")
     elif action == "double":
         hhmm, name = key.split("|")
-        send_message(chat_id, "請輸入另一服務人員名稱（不可重複）")
         for a in appointments.get(hhmm, []):
             if a["name"] == name:
                 a["awaiting_double"] = True
+        send_message(chat_id, "請輸入另一服務人員名稱（不可重複）")
     elif action == "complete":
         hhmm, name = key.split("|")
-        send_message(chat_id, "請輸入實收金額（數字）")
         for a in appointments.get(hhmm, []):
             if a["name"] == name:
                 a["awaiting_complete"] = True
+        send_message(chat_id, "請輸入實收金額（數字）")
     elif action == "modify":
         hhmm, name = key.split("|")
         for a in appointments.get(hhmm, []):
             if a["name"] == name:
                 a["awaiting_customer"] = True
         send_message(chat_id, "請重新輸入客稱、年紀、服務人員（格式：客小美 28 / 小張）")
-
-# --- 發送已通知訊息 ---
-def send_checkin_message(chat_id, hhmm, name, amount):
-    reply_markup = {
-        "inline_keyboard": [[
-            create_inline_button("輸入客資", f"input_customer:{hhmm}|{name}|{amount}"),
-            create_inline_button("未消", f"unsold:{hhmm}|{name}|{amount}")
-        ]]
-    }
-    send_message(chat_id, f"已通知 – {name} / {amount}", reply_markup)
 
 # --- Flask Webhook ---
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
