@@ -7,10 +7,11 @@ BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 app = Flask(__name__)
 
+# Webhook 入口
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print(data)  # 可以在 Zeabur logs 看到訊息內容
+    print(data)  # 日誌中可以看到 Telegram 傳來的資料（測試用）
 
     # 收到一般訊息
     if "message" in data:
@@ -28,6 +29,12 @@ def webhook():
                 "chat_id": chat_id,
                 "text": "請選擇操作：",
                 "reply_markup": keyboard
+            })
+        else:
+            # 測試用回覆，確保 webhook 收到訊息
+            requests.post(f"{BASE_URL}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": f"收到訊息：{text}"
             })
 
     # 收到按鈕回傳
@@ -51,9 +58,10 @@ def webhook():
     return "OK", 200
 
 
+# 瀏覽器測試用
 @app.route("/", methods=["GET"])
 def index():
-    return "Bot is running."
+    return "Bot is running. Webhook test OK."
 
 
 if __name__ == "__main__":
