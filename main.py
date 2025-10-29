@@ -2,18 +2,20 @@ import os
 import requests
 from flask import Flask, request
 
-TOKEN = os.environ.get("BOT_TOKEN")  # 你的 Telegram Bot Token
+TOKEN = os.environ.get("BOT_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 app = Flask(__name__)
 
-# 顯示一個按鈕
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.get_json()
+    print(data)  # 可以在 Zeabur logs 看到訊息內容
+
+    # 收到一般訊息
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
+        text = data["message"].get("text", "").lower()
 
         if text == "/start":
             keyboard = {
@@ -27,21 +29,23 @@ def webhook():
                 "text": "請選擇操作：",
                 "reply_markup": keyboard
             })
+
+    # 收到按鈕回傳
     elif "callback_query" in data:
         callback = data["callback_query"]
         chat_id = callback["message"]["chat"]["id"]
         query_data = callback["data"]
 
         if query_data == "checkin":
-            text = "你已成功報到 ✅"
+            reply_text = "✅ 你已成功報到！"
         elif query_data == "cancel":
-            text = "已取消報到 ❌"
+            reply_text = "❌ 已取消報到"
         else:
-            text = "未知指令"
+            reply_text = "未知指令"
 
         requests.post(f"{BASE_URL}/sendMessage", json={
             "chat_id": chat_id,
-            "text": text
+            "text": reply_text
         })
 
     return "OK", 200
