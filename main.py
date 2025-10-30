@@ -321,7 +321,73 @@ def handle_text_message(msg):
             broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
             clear_pending_for(user_id)
             return
+        if action == "arrive_wait_amount":
+            hhmm = pending["hhmm"]
+            name = pending["name"]
+            group_chat = pending["group_chat"]
+            amount_text = text.strip()
 
+            # 檢查是否為數字
+            try:
+                amount = float(amount_text)
+            except ValueError:
+                send_message(group_chat, "⚠️ 金額格式錯誤，請輸入數字")
+                return
+
+            path = ensure_today_file()
+            data = load_json_file(path)
+            s = find_shift(data.get("shifts", []), hhmm)
+            if not s:
+                send_message(group_chat, f"⚠️ 找不到時段 {hhmm}")
+                clear_pending_for(user_id)
+                return
+
+            # 找 booking
+            booking = next((b for b in s.get("bookings", []) if b.get("name") == name and b.get("chat_id") == group_chat), None)
+            if booking:
+                # 移到 in_progress，記錄金額
+                s.setdefault("in_progress", []).append({"name": name, "amount": amount})
+                s["bookings"] = [b for b in s.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == group_chat)]
+                save_json_file(path, data)
+
+                send_message(group_chat, f"✅ {hhmm} {name} 已標記到場，金額：{amount}")
+                # ➡️ 新增：通知所有服務員群組
+               staff_message = f"📌 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
+               staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
+               broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
+
+            else:
+                send_message(group_chat, f"⚠️ 找不到預約 {name} 或已被移除")
+            clear_pending_for(user_id)
+            return
+        if action == "input_client":
+            try:
+                client_name, age, staff_name, amount = text.split()
+            except ValueError:
+                send_message(chat_id, "❌ 格式錯誤，請輸入：小美 25 Alice 3000")
+                return {"ok": True}
+
+            hhmm = pending["hhmm"]
+            business_name = pending["business_name"]
+            business_chat_id = pending["business_chat_id"]
+
+            # 1️⃣ 發給業務群
+            msg_business = f"📌 客\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}"
+            send_message(int(business_chat_id), msg_business)
+
+            # 2️⃣ 發給服務員群，附三個按鈕
+            staff_buttons = [
+                [
+                    {"text": "雙", "callback_data": f"double|{hhmm}|{business_name}|{business_chat_id}"},
+                    {"text": "完成服務", "callback_data": f"complete|{hhmm}|{business_name}|{business_chat_id}"},
+                    {"text": "修正", "callback_data": f"fix|{hhmm}|{business_name}|{business_chat_id}"}
+                ]
+            ]
+            send_message(chat_id, f"📌 客\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}", buttons=staff_buttons)
+
+            # 3️⃣ 清除 pending
+            clear_pending_for(user_id)
+            return {"ok": True}
         # -------- modify_wait_name --------
         if action == "modify_wait_name":
             old_hhmm = pending.get("old_hhmm")
@@ -628,19 +694,24 @@ def webhook():
                     answer_callback(callback_id, "資料錯誤")
                     return {"ok": True}
                 _, hhmm, name = parts
-                path = ensure_today_file()
-                datafile = load_json_file(path)
-                s = find_shift(datafile.get("shifts", []), hhmm)
-                if not s:
-                    answer_callback(callback_id, "找不到該時段")
-                    return {"ok": True}
+
+                # 設定 pending 等待輸入金額
+                set_pending_for(user_id, {
+                    "action": "arrive_wait_amount",
+                    "hhmm": hhmm,
+                    "name": name,
+                    "group_chat": chat_id
+                })
+                send_message(chat_id, f"✏️ 請輸入 {hhmm} {name} 的金額（數字）：")
+                answer_callback(callback_id)
+                return {"ok": True}
                 # 找 booking（需 match chat_id）
                 booking = next((b for b in s.get("bookings", []) if b.get("name") == name and b.get("chat_id") == chat_id), None)
                 if booking:
                     s.setdefault("in_progress", []).append(name)
                     s["bookings"] = [b for b in s.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == chat_id)]
                     save_json_file(path, datafile)
-                    send_message(chat_id, f"✅ {hhmm} {name} 已標記為到場（已報到）")
+                    send_message(chat_id, f"✅ {hhmm} {name} （已報到）")
                     answer_callback(callback_id)
                     return {"ok": True}
                 else:
@@ -733,6 +804,91 @@ def webhook():
             answer_callback(callback_id, "操作已接收。")
             return {"ok": True}
 
+            if data and data.startswith("staff_up|"):
+                _, hhmm, name, business_chat_id = data.split("|", 3)
+
+                # 1️⃣ 通知業務群組
+                msg = f"📌 上 {hhmm} {name}"
+                send_message(int(business_chat_id), msg)
+
+                # 2️⃣ 回覆服務員群組訊息，附加按鈕
+                staff_buttons = [
+                    [
+                        {"text": "輸入客資", "callback_data": f"input_client|{hhmm}|{name}|{business_chat_id}"},
+                        {"text": "未消", "callback_data": f"not_consumed|{hhmm}|{name}|{business_chat_id}"}
+                    ]
+                ]
+                send_message(chat_id, f"✅ 已通知業務 {name} ", buttons=staff_buttons)
+
+                answer_callback(callback_id, "操作完成")
+                return {"ok": True}
+            # 服務員上 -> 輸入客資
+            if data.startswith("input_client|"):
+                _, hhmm, name, business_chat_id = data.split("|", 3)
+                # 改成帶業務名參數
+                set_pending_for(user_id, {
+                    "action": "input_client",
+                    "hhmm": hhmm,
+                    "business_name": name,
+                    "business_chat_id": business_chat_id
+                })
+                send_message(chat_id, f"✏️ 請輸入客稱、年紀、服務人員與金額（格式：小美25 Alice 3000）")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # 服務員上 -> 未消
+            if data.startswith("not_consumed|"):
+                _, hhmm, name, business_chat_id = data.split("|", 3)
+                set_pending_for(user_id, {
+                    "action": "not_consumed_reason",
+                    "hhmm": hhmm,
+                    "name": name,
+                    "business_chat_id": business_chat_id
+                })
+                send_message(chat_id, "✏️ 請輸入未消原因：")
+                answer_callback(callback_id)
+                return {"ok": True}
+            if "callback_query" in req_json:
+                cb = req_json["callback_query"]
+                data = cb["data"]
+                chat_id = cb["message"]["chat"]["id"]
+                message_id = cb["message"]["message_id"]
+                user_id = cb["from"]["id"]
+
+                parts = data.split("|")
+                action = parts[0]
+                hhmm = parts[1]
+                business_name = parts[2]
+                business_chat_id = int(parts[3])
+
+            if action == "double":
+                # 取得當前使用者名稱
+                staff_name = get_staff_name(user_id)
+
+                # 檢查是否已有第一位雙人服務員
+                if hhmm not in double_staffs:
+                    double_staffs[hhmm] = [staff_name]
+                    edit_message(chat_id, message_id, f"✅ {staff_name} 已加入雙人服務\n目前服務人員: {staff_name}")
+                else:
+                    # 加第二位，避免重複
+                    if staff_name in double_staffs[hhmm]:
+                        edit_message(chat_id, message_id, f"❌ {staff_name} 已經被選為雙人服務")
+                    else:
+                        double_staffs[hhmm].append(staff_name)
+                        staff_list = "、".join(double_staffs[hhmm])
+                        edit_message(chat_id, message_id, f"✅ 雙人服務確認\n{hhmm} {client_name} {age}  {business_name} {amount}\n服務人員: {staff_list}")
+
+            elif action == "complete":
+                    # 完成服務，記錄實際金額，並通知業務
+                    actual_amount = get_actual_amount(user_id, hhmm)
+                    edit_message(chat_id, message_id, f"✅ 完成服務通知\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}\n金額: {actual_amount}")
+                    send_message(business_chat_id, f"✅ 完成服務通知\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}\n金額: {actual_amount}")
+
+            elif action == "fix":
+                    # 重新輸入客資
+                    set_pending_for(user_id, action="input_client", hhmm=hhmm, business_name=business_name, business_chat_id=business_chat_id)
+                    edit_message(chat_id, message_id, "✏️ 請重新輸入客資，格式：小美 25 Alice 3000")
+
     except Exception:
         traceback.print_exc()
     return {"ok": True}
@@ -781,7 +937,7 @@ def ask_arrivals_thread():
                     for b in s.get("bookings", []):
                         name = b.get("name")
                         gid = b.get("chat_id")
-                        if name not in s.get("in_progress", []):
+                        if name not in [x["name"] if isinstance(x, dict) else x for x in s.get("in_progress", [])]:
                             waiting.append(name)
                             groups_to_notify.add(gid)
 
