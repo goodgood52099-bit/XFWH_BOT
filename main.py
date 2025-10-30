@@ -584,12 +584,6 @@ def webhook():
             message = cq.get("message", {}) or {}
             chat = message.get("chat", {}) or {}
             chat_id = chat.get("id")
-        elif "callback_query" in req_json:
-            callback = req_json["callback_query"]
-            data = callback.get("data")
-            callback_id = callback["id"]
-            chat_id = callback["message"]["chat"]["id"]
-            user_id = callback["from"]["id"]
 
             # 主按鈕 main|reserve / arrive / modify / cancel
             if data and data.startswith("main|"):
@@ -809,7 +803,12 @@ def webhook():
             # fallback
             answer_callback(callback_id, "操作已接收。")
             return {"ok": True}
-
+            elif "callback_query" in req_json:
+            callback = req_json["callback_query"]
+            data = callback.get("data")
+            callback_id = callback["id"]
+            chat_id = callback["message"]["chat"]["id"]
+            user_id = callback["from"]["id"]
             if data and data.startswith("staff_up|"):
                 _, hhmm, name, business_chat_id = data.split("|", 3)
 
