@@ -17,9 +17,6 @@ TZ = ZoneInfo("Asia/Taipei")
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-lock = threading.Lock()
-asked_shifts = set()
-
 # --- 環境變數 ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",")
@@ -34,11 +31,9 @@ appointments = {}  # {"HHMM": [{"name": str, "status": reserved/checkedin, "amou
 
 # -------------------------------
 def data_path_for(day): return os.path.join(DATA_DIR, f"{day}.json")
-
 def load_json_file(path, default=None):
     if not os.path.exists(path): return default or {}
     with open(path, "r", encoding="utf-8") as f: return json.load(f)
-
 def save_json_file(path, data):
     with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -80,7 +75,7 @@ def create_inline_button(text, callback_data):
     return {"text": text, "callback_data": callback_data}
 
 # =========================
-# 生成最新時段列表
+# 最新時段列表
 # =========================
 def generate_latest_shift_list():
     msg_lines = []
@@ -89,7 +84,6 @@ def generate_latest_shift_list():
     for hhmm in sorted(appointments.keys()):
         for a in appointments[hhmm]:
             shift_dt = datetime.combine(now.date(), dt_time(int(hhmm[:2]), int(hhmm[2:]))).replace(tzinfo=TZ)
-            shift_is_past = shift_dt < now
             checked_in_count = 0
             if a.get("status") == "checkedin":
                 checked_in_lines.append(f"{hhmm} {a['name']} ✅")
@@ -105,60 +99,6 @@ def generate_latest_shift_list():
 
 def send_latest_slots(chat_id): send_message(chat_id, generate_latest_shift_list())
 
-# =========================
-# 點選預約按鈕 → 顯示時段按鈕
-# =========================
-def send_shift_buttons(chat_id):
-    now = datetime.now(TZ)
-    buttons = []
-    for h in range(13, 23):
-        hhmm = f"{h:02d}00"
-        shift_dt = datetime.combine(now.date(), dt_time(h, 0)).replace(tzinfo=TZ)
-        if shift_dt <= now: continue
-        shift_list = appointments.get(hhmm, [])
-        reserved_count = sum(1 for a in shift_list if a.get("status")=="reserved")
-        checked_count = sum(1 for a in shift_list if a.get("status")=="checkedin")
-        limit = 3
-        if reserved_count + checked_count >= limit: btn = create_inline_button(f"{h:02d}:00 ❌", "disabled")
-        else: btn = create_inline_button(f"{h:02d}:00", f"reserve:{hhmm}")
-        buttons.append(btn)
-    # 每行 3 個
-    inline_keyboard = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
-    send_message(chat_id,"請選擇時段：",{"inline_keyboard": inline_keyboard})
-
-# =========================
-# 點選時段後輸入業務名稱/金額生成預約
-# =========================
-def handle_shift_reservation(chat_id, text):
-    if chat_id not in asked_shifts: return False
-    hhmm = asked_shifts.pop(chat_id)
-    try:
-        name_part, amount_part = text.split("/")
-        name = name_part.strip()
-        amount = int(amount_part.strip())
-    except:
-        send_message(chat_id, "格式錯誤，請輸入：業務名稱 / 金額")
-        asked_shifts.add(chat_id)
-        return True
-
-    with lock:
-        if hhmm not in appointments: appointments[hhmm] = []
-        shift_list = appointments[hhmm]
-        reserved_count = sum(1 for a in shift_list if a.get("status")=="reserved")
-        checked_count = sum(1 for a in shift_list if a.get("status")=="checkedin")
-        limit = 3
-        if reserved_count + checked_count >= limit:
-            send_message(chat_id,f"{hhmm} 時段已滿，請選擇其他時段")
-            return True
-        unique_name = generate_unique_name(shift_list, name)
-        shift_list.append({"name": unique_name, "status":"reserved", "amount":amount, "customer":{}, "staff":[],"business_group_id":chat_id})
-        send_message(chat_id,f"{hhmm} 已預約成功：{unique_name} / {amount}")
-        broadcast_latest_to_all()
-    return True
-
-# =========================
-# 發送業務功能選單
-# =========================
 def send_business_menu(chat_id):
     reply_markup = {
         "inline_keyboard":[
@@ -170,7 +110,7 @@ def send_business_menu(chat_id):
     send_message(chat_id,"請選擇操作功能：",reply_markup)
 
 def broadcast_latest_to_all():
-    for gid in BUSINESS_GROUP_IDS: send_latest_slots(gid)
+    for gid in BUSINESS_GROUP_IDS + STAFF_GROUP_IDS: send_latest_slots(gid)
 
 # =========================
 # 排程
@@ -180,7 +120,7 @@ def announce_latest_slots():
         now = datetime.now(TZ)
         next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         time.sleep((next_hour - now).total_seconds())
-        for gid in BUSINESS_GROUP_IDS: send_latest_slots(gid)
+        broadcast_latest_to_all()
 
 def daily_reset_appointments():
     while True:
@@ -199,7 +139,7 @@ def ask_clients_checkin():
         for hhmm in sorted(appointments.keys()):
             if hhmm < now_hhmm: continue
             for a in appointments[hhmm]:
-                if a["status"]=="reserved":
+                if a.get("status")=="reserved":
                     reply_markup = {"inline_keyboard":[[
                         create_inline_button("上", f"checkin:{hhmm}|{a['name']}|{a['amount']}")
                     ]]}
@@ -208,31 +148,26 @@ def ask_clients_checkin():
                         send_message(business_gid,f"現在是 {now_hhmm}，請問預約 {hhmm} 的 {a['name']} 到了嗎？",reply_markup=reply_markup)
 
 # =========================
-# 處理文字訊息
+# 處理訊息
 # =========================
 def handle_message(message):
     chat_id = message["chat"]["id"]
     text = message.get("text","")
     user_id = str(message["from"]["id"])
-
-    if handle_shift_reservation(chat_id, text): return
-
+    
     # 設定服務員群
     if text.startswith("/STAFF") and user_id in ADMIN_IDS:
         if chat_id not in STAFF_GROUP_IDS: STAFF_GROUP_IDS.append(chat_id)
         send_message(chat_id,f"已設定本群為服務員群：{chat_id}")
         return
-
+    
+    # 新增業務群
     if chat_id not in BUSINESS_GROUP_IDS:
         BUSINESS_GROUP_IDS.append(chat_id)
         send_business_menu(chat_id)
         send_message(chat_id,f"已將本群加入業務群列表：{chat_id}")
         return
-
-    if chat_id not in BUSINESS_GROUP_IDS and chat_id not in STAFF_GROUP_IDS:
-        send_message(chat_id,"⚠️ 只能在業務群或服務員群操作此功能")
-        return
-
+    
     # 處理客資輸入
     if " / " in text:
         try:
@@ -245,21 +180,23 @@ def handle_message(message):
                         a["customer"] = customer_info
                         if staff_name not in a["staff"]: a["staff"].append(staff_name)
                         a["awaiting_customer"]=False
-                        for gid in STAFF_GROUP_IDS:
-                            send_message(gid,
-                                f"{hhmm} – {a['name']} / {a.get('amount',0)}\n客稱年紀：{customer_info}\n服務人員：{staff_name}",
-                                reply_markup={"inline_keyboard":[
-                                    [create_inline_button("雙", f"double:{hhmm}|{a['name']}"),
-                                     create_inline_button("完成服務", f"complete:{hhmm}|{a['name']}")],
-                                    [create_inline_button("修改", f"modify:{hhmm}|{a['name']}"),
-                                     create_inline_button("未消", f"unsold:{hhmm}|{a['name']}")]
-                                ]})
                         business_gid = a.get("business_group_id")
-                        if business_gid: send_message(business_gid,f"{a['name']} / {customer_info} / {staff_name}")
+                        # 通知業務群（精簡顯示）
+                        if business_gid:
+                            send_message(business_gid,f"{customer_info} / {a['name']} / {staff_name}")
+                        # 通知服務員群（附按鈕）
+                        for gid in STAFF_GROUP_IDS:
+                            reply_markup = {"inline_keyboard":[
+                                [create_inline_button("完成服務", f"complete:{hhmm}|{a['name']}"),
+                                 create_inline_button("雙", f"double:{hhmm}|{a['name']}"),
+                                 create_inline_button("修正", f"modify:{hhmm}|{a['name']}")]
+                            ]}
+                            send_message(gid,f"{hhmm} – {a['name']}\n客稱年紀：{customer_info}\n服務人員：{staff_name}",reply_markup)
                         broadcast_latest_to_all()
                         return
         except: pass
-
+    
+    # 處理未消輸入
     if text.startswith("原因："):
         reason = text.replace("原因：","").strip()
         for hhmm,lst in appointments.items():
@@ -269,7 +206,7 @@ def handle_message(message):
                     a["awaiting_unsold"]=False
                     for gid in STAFF_GROUP_IDS: send_message(gid,f"已標記為未消 – 原因：{reason}")
                     business_gid = a.get("business_group_id")
-                    if business_gid: send_message(business_gid,f"{a['name']} / 原因：{reason}")
+                    if business_gid: send_message(business_gid,f"未消 {reason}")
                     broadcast_latest_to_all()
                     return
 
@@ -289,16 +226,122 @@ def handle_callback(callback):
 
     if action == "action":
         cmd = key
-        if cmd == "reserve": send_shift_buttons(chat_id)
+        if cmd == "reserve":
+            # 先選時段
+            reply_markup = {"inline_keyboard":[]}
+            row = []
+            now_hhmm = datetime.now(TZ).strftime("%H%M")
+            for hh in range(13, 23):
+                hhmm = f"{hh:02d}00"
+                if hhmm < now_hhmm:
+                    continue
+                limit = 3
+                booked = len([a for a in appointments.get(hhmm, []) if a.get("status")=="reserved"])
+                if booked < limit:
+                    row.append(create_inline_button(f"{hh:02d}:00", f"select_time:{hhmm}"))
+                else:
+                    row.append({"text": f"{hh:02d}:00 ❌", "callback_data": "none"})
+                if len(row) == 3:
+                    reply_markup["inline_keyboard"].append(row)
+                    row = []
+            if row: reply_markup["inline_keyboard"].append(row)
+            send_message(chat_id, "請選擇預約時段：", reply_markup)
+        elif cmd=="view": send_latest_slots(chat_id)
         elif cmd=="modify": send_message(chat_id,"請選擇要修改的預約")
         elif cmd=="cancel": send_message(chat_id,"請選擇要取消的預約")
-        elif cmd=="view": send_latest_slots(chat_id)
         elif cmd=="checkin": send_message(chat_id,"請選擇報到的客人")
 
-    elif action=="reserve":
+    elif action == "select_time":
         hhmm = key
-        asked_shifts.add(chat_id)
-        send_message(chat_id,f"你選擇 {hhmm}，請輸入：業務名稱 / 金額")
+        appointments.setdefault(hhmm, [])
+        appointments[hhmm].append({
+            "name": "",
+            "status":"reserved",
+            "amount":0,
+            "customer":{},
+            "staff":[],
+            "business_group_id":chat_id,
+            "awaiting_business": True
+        })
+        send_message(chat_id,f"已選時段 {hhmm}，請輸入「業務名稱 金額」格式")
+
+    elif action == "input_business":
+        for hhmm,lst in appointments.items():
+            for a in reversed(lst):
+                if a.get("awaiting_business", False):
+                    parts = key.split()
+                    if len(parts)<2:
+                        send_message(chat_id,"格式錯誤，請輸入「業務名稱 金額」")
+                        return
+                    a["name"]=parts[0]
+                    a["amount"]=int(parts[1])
+                    a["business_group_id"]=chat_id
+                    a["awaiting_business"]=False
+                    send_message(chat_id,f"✅ 已預約 {hhmm} {a['name']}")
+                    broadcast_latest_to_all()
+                    return
+
+    elif action == "checkin":
+        hhmm,name,amount = key.split("|")
+        business_gid = None
+        for a in appointments.get(hhmm,[]):
+            if a["name"]==name: business_gid = a.get("business_group_id"); break
+        if business_gid: send_message(business_gid,f"上 – {hhmm} – {name} / {amount}")
+        reply_markup = {"inline_keyboard":[
+            [create_inline_button("輸入客資", f"input_customer:{hhmm}|{name}"),
+             create_inline_button("未消", f"unsold:{hhmm}|{name}")]
+        ]}
+        send_message(chat_id,f"✅ 已通知業務 {name}",reply_markup)
+
+    elif action in ["input_customer","unsold","double","complete","modify"]:
+        hhmm,*rest = key.split("|")
+        name = rest[0]
+        amount = int(rest[1]) if len(rest)>1 else None
+        for a in appointments.get(hhmm,[]):
+            if a["name"]==name and (amount is None or a.get("amount")==amount):
+                business_gid = a.get("business_group_id")
+                if action=="input_customer":
+                    a["awaiting_customer"]=True
+                    send_message(chat_id,"請輸入客稱、年紀、服務人員（格式：客小美 28 / 小張）")
+                elif action=="unsold":
+                    a["awaiting_unsold"]=True
+                    send_message(chat_id,"請輸入原因（格式：原因：XXXX）")
+                elif action=="double":
+                    a["awaiting_double"]=True
+                    send_message(chat_id,"請輸入另一服務人員名稱（不可重複）")
+                elif action=="complete":
+                    a["awaiting_complete"]=True
+                    send_message(chat_id,"請輸入實收金額（數字）")
+                elif action=="modify":
+                    a["awaiting_customer"]=True
+                    send_message(chat_id,"請重新輸入客稱、年紀、服務人員（格式：客小美 28 / 小張）")
+
+                # 通知業務群（精簡顯示）
+                if business_gid:
+                    if action=="unsold":
+                        text = f"未消 {a.get('unsold_reason','')}"
+                    elif action=="input_customer":
+                        customer_info = a.get("customer","")
+                        staff_names = ", ".join(a.get("staff",[]))
+                        text = f"{customer_info} / {a['name']} / {staff_names}"
+                    else:
+                        text = f"{a['name']} / {a.get('amount','')}"
+                    send_message(business_gid, text)
+
+                # 通知服務員群
+                for gid in STAFF_GROUP_IDS:
+                    if action=="input_customer":
+                        customer_info = a.get("customer","")
+                        staff_names = ", ".join(a.get("staff",[]))
+                        reply_markup = {"inline_keyboard":[
+                            [create_inline_button("完成服務", f"complete:{hhmm}|{a['name']}"),
+                             create_inline_button("雙", f"double:{hhmm}|{a['name']}"),
+                             create_inline_button("修正", f"modify:{hhmm}|{a['name']}")]
+                        ]}
+                        send_message(gid,f"{hhmm} – {a['name']}\n客稱年紀：{customer_info}\n服務人員：{staff_names}",reply_markup)
+                    elif action=="unsold":
+                        send_message(gid,f"{hhmm} – {a['name']} 未消 原因：{a.get('unsold_reason','')}")
+                broadcast_latest_to_all()
 
 # =========================
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
@@ -318,10 +361,9 @@ def home(): return "Bot is running ✅"
 # =========================
 def start_threads():
     threading.Thread(target=announce_latest_slots, daemon=True).start()
-    threading.Thread(target=ask_clients_checkin, daemon=True).start()
     threading.Thread(target=daily_reset_appointments, daemon=True).start()
+    threading.Thread(target=ask_clients_checkin, daemon=True).start()
 
 if __name__=="__main__":
-    ensure_today_file()
     start_threads()
     app.run(host="0.0.0.0", port=PORT)
