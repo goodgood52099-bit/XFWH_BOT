@@ -261,210 +261,240 @@ def build_bookings_buttons(bookings, chat_id, prefix):
 # message 處理（文字）
 # -------------------------------
 def handle_text_message(msg):
-    try:
-        text = msg.get("text", "").strip() if msg.get("text") else ""
-        chat = msg.get("chat", {})
-        chat_id = chat.get("id")
-        chat_type = chat.get("type")
-        user = msg.get("from", {})
-        user_id = user.get("id")
-        user_name = user.get("first_name", "")
+    text = msg.get("text", "").strip() if msg.get("text") else ""
+    chat = msg.get("chat", {})
+    chat_id = chat.get("id")
+    chat_type = chat.get("type")
+    user = msg.get("from", {})
+    user_id = user.get("id")
+    user_name = user.get("first_name", "")
 
-        # 新群組自動記錄為 business
-        add_group(chat_id, chat_type)
+    # 新群組自動記錄為 business（若管理員 later 可 /STAFF 變更）
+    add_group(chat_id, chat_type)
 
-        # 檢查 pending
-        pending = get_pending_for(user_id)
+    # 若該使用者存在 pending（等待輸入姓名或新姓名），用文字處理
+    pending = get_pending_for(user_id)
+    if pending:
+        action = pending.get("action")
         path = ensure_today_file()
         data = load_json_file(path)
+        # -------- reserve_wait_name --------
+        if action == "reserve_wait_name":
+            hhmm = pending.get("hhmm")
+            group_chat = pending.get("group_chat")  # 記錄預約的群組
+            name_input = text.strip()  # 使用者輸入業務名
 
-        if pending:
-            action = pending.get("action")
+            # 確保今天檔案存在
+            path = ensure_today_file()
+            data = load_json_file(path)
 
-            # -------- reserve_wait_name --------
-            if action == "reserve_wait_name":
-                hhmm = pending.get("hhmm")
-                group_chat = pending.get("group_chat")
-                name_input = text
+            # 尋找對應時段
+            s = next((s for s in data.get("shifts", []) if s.get("time") == hhmm), None)
+            if not s:
+                send_message(group_chat, f"⚠️ 時段 {hhmm} 不存在或已過期。")
+                clear_pending_for(user_id)
+                return
 
-                s = find_shift(data.get("shifts", []), hhmm)
-                if not s:
-                    send_message(group_chat, f"⚠️ 時段 {hhmm} 不存在或已過期。")
-                    clear_pending_for(user_id)
-                    return
+            # 計算未滿額（排除候補）
+            used = len(s.get("bookings", [])) + len([x for x in s.get("in_progress", []) if not str(x).endswith("(候補)")])
+            limit = s.get("limit", 1)
+            if used >= limit:
+                send_message(group_chat, f"⚠️ {hhmm} 已滿額，無法預約。")
+                clear_pending_for(user_id)
+                return
 
-                used = len(s.get("bookings", [])) + len([x for x in s.get("in_progress", []) if not str(x).endswith("(候補)")])
-                if used >= s.get("limit", 1):
-                    send_message(group_chat, f"⚠️ {hhmm} 已滿額，無法預約。")
-                    clear_pending_for(user_id)
-                    return
+            # 生成唯一名稱，避免重名
+            existing_names = [b["name"] for b in s.get("bookings", []) if isinstance(b, dict)]
+            unique_name = name_input
+            idx = 2
+            while unique_name in existing_names:
+                unique_name = f"{name_input}({idx})"
+                idx += 1
 
-                unique_name = generate_unique_name(s.get("bookings", []), name_input)
-                s.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
+            # 新增預約
+            s.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
+            save_json_file(path, data)
+
+            send_message(group_chat, f"✅ {unique_name} 已預約 {hhmm}")
+            buttons = [
+                [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+                [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+            ]
+            broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
+            clear_pending_for(user_id)
+            return
+        if action == "arrive_wait_amount":
+            hhmm = pending["hhmm"]
+            name = pending["name"]
+            group_chat = pending["group_chat"]
+            amount_text = text.strip()
+
+            # 檢查是否為數字
+            try:
+                amount = float(amount_text)
+            except ValueError:
+                send_message(group_chat, "⚠️ 金額格式錯誤，請輸入數字")
+                return
+
+            path = ensure_today_file()
+            data = load_json_file(path)
+            s = find_shift(data.get("shifts", []), hhmm)
+            if not s:
+                send_message(group_chat, f"⚠️ 找不到時段 {hhmm}")
+                clear_pending_for(user_id)
+                return
+
+            # 找 booking
+            booking = next((b for b in s.get("bookings", []) if b.get("name") == name and b.get("chat_id") == group_chat), None)
+            if booking:
+                # 移到 in_progress，記錄金額
+                s.setdefault("in_progress", []).append({"name": name, "amount": amount})
+                s["bookings"] = [b for b in s.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == group_chat)]
                 save_json_file(path, data)
 
-                send_message(group_chat, f"✅ {unique_name} 已預約 {hhmm}")
-                buttons = [
-                    [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
-                    [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+                send_message(group_chat, f"✅ {hhmm} {name} 已標記到場，金額：{amount}")
+                # ➡️ 新增：通知所有服務員群組
+                staff_message = f"📌 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
+                staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
+                broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
+
+            else:
+                send_message(group_chat, f"⚠️ 找不到預約 {name} 或已被移除")
+            clear_pending_for(user_id)
+            return
+        if action == "input_client":
+            try:
+                client_name, age, staff_name, amount = text.split()
+            except ValueError:
+                send_message(chat_id, "❌ 格式錯誤，請輸入：小美 25 Alice 3000")
+                return {"ok": True}
+
+            hhmm = pending["hhmm"]
+            business_name = pending["business_name"]
+            business_chat_id = pending["business_chat_id"]
+
+            # 1️⃣ 發給業務群
+            msg_business = f"📌 客\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}"
+            send_message(int(business_chat_id), msg_business)
+
+            # 2️⃣ 發給服務員群，附三個按鈕
+            staff_buttons = [
+                [
+                    {"text": "雙", "callback_data": f"double|{hhmm}|{business_name}|{business_chat_id}"},
+                    {"text": "完成服務", "callback_data": f"complete|{hhmm}|{business_name}|{business_chat_id}"},
+                    {"text": "修正", "callback_data": f"fix|{hhmm}|{business_name}|{business_chat_id}"}
                 ]
-                broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
-                clear_pending_for(user_id)
+            ]
+            send_message(chat_id, f"📌 客\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}", buttons=staff_buttons)
+
+            # 3️⃣ 清除 pending
+            clear_pending_for(user_id)
+            return {"ok": True}
+        # 雙動作    
+        if action == "double_wait_second":
+            hhmm = pending["hhmm"]
+            business_name = pending["business_name"]
+            business_chat_id = pending["business_chat_id"]
+            first_staff = pending["first_staff"]
+
+            second_staff = text.strip()
+
+            # 記錄雙人服務
+            double_staffs[hhmm] = [first_staff, second_staff]
+
+            staff_list = "、".join(double_staffs[hhmm])
+           
+            # 通知業務群或服務員群
+            send_message(int(business_chat_id), f"👥 雙人服務更新：{staff_list}")
+
+            clear_pending_for(user_id)
+            return {"ok": True}
+        # 完成服務輸入金額動作
+        if action == "complete_wait_amount":
+            hhmm = pending["hhmm"]
+            business_name = pending["business_name"]
+            business_chat_id = pending["business_chat_id"]
+            staff_list = pending["staff_list"]
+            staff_str = "、".join(staff_list)
+
+            # 解析金額
+            amount_text = text.strip()
+            try:
+                amount = float(amount_text)
+            except ValueError:
+                send_message(chat_id, "⚠️ 金額格式錯誤，請輸入數字")
                 return
 
-            # -------- arrive_wait_amount --------
-            if action == "arrive_wait_amount":
-                hhmm = pending["hhmm"]
-                name = pending["name"]
-                group_chat = pending["group_chat"]
-                try:
-                    amount = float(text)
-                except ValueError:
-                    send_message(group_chat, "⚠️ 金額格式錯誤，請輸入數字")
-                    return
+            # 發送完成通知
+            msg = f"✅ 完成服務通知\n{hhmm} {business_name}\n服務人員: {staff_str}\n金額: {amount}"
+            send_message(chat_id, msg)
+            send_message(int(business_chat_id), msg)
 
-                s = find_shift(data.get("shifts", []), hhmm)
-                if not s:
-                    send_message(group_chat, f"⚠️ 找不到時段 {hhmm}")
-                    clear_pending_for(user_id)
-                    return
+            clear_pending_for(user_id)
+            return {"ok": True}
+        # 完成服務輸入金額動作   
+        if action == "not_consumed_wait_reason":
+            hhmm = pending["hhmm"]
+            name = pending["name"]
+            business_chat_id = pending["business_chat_id"]
+            reason = text.strip()
 
-                booking = next((b for b in s.get("bookings", []) if b.get("name") == name and b.get("chat_id") == group_chat), None)
-                if booking:
-                    # 移到 in_progress，統一使用 dict
-                    s.setdefault("in_progress", []).append({"name": name, "amount": amount})
-                    s["bookings"] = [b for b in s.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == group_chat)]
-                    save_json_file(path, data)
+            # 發送未消通知給業務群
+            msg = f"⚠️ 未消: {name} {reason}"
+            send_message(chat_id, f"掰掰謝謝光臨!!")  # 可以發給服務員群確認
+            send_message(int(business_chat_id), msg)  # 發給業務群
 
-                    send_message(group_chat, f"✅ {hhmm} {name} 已標記到場，金額：{amount}")
-                    staff_message = f"📌 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
-                    staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
-                    broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
-                else:
-                    send_message(group_chat, f"⚠️ 找不到預約 {name} 或已被移除")
+            clear_pending_for(user_id)
+            return {"ok": True}
+
+        # -------- modify_wait_name --------
+        if action == "modify_wait_name":
+            old_hhmm = pending.get("old_hhmm")
+            old_name = pending.get("old_name")
+            new_hhmm = pending.get("new_hhmm")
+            group_chat = pending.get("group_chat")
+            new_name_input = text
+            old_shift = find_shift(data.get("shifts", []), old_hhmm)
+            if not old_shift:
+                send_message(group_chat, f"⚠️ 原時段 {old_hhmm} 不存在。")
                 clear_pending_for(user_id)
                 return
-
-            # -------- input_client --------
-            if action == "input_client":
-                try:
-                    client_name, age, staff_name, amount = text.split(maxsplit=3)
-                except ValueError:
-                    send_message(chat_id, "❌ 格式錯誤，請輸入：小美 25 Alice 3000")
-                    return {"ok": True}
-
-                hhmm = pending["hhmm"]
-                business_name = pending["business_name"]
-                business_chat_id = pending["business_chat_id"]
-
-                msg_business = f"📌 客\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}"
-                send_message(int(business_chat_id), msg_business)
-
-                staff_buttons = [
-                    [
-                        {"text": "雙", "callback_data": f"double|{hhmm}|{business_name}|{business_chat_id}"},
-                        {"text": "完成服務", "callback_data": f"complete|{hhmm}|{business_name}|{business_chat_id}"},
-                        {"text": "修正", "callback_data": f"fix|{hhmm}|{business_name}|{business_chat_id}"}
-                    ]
-                ]
-                send_message(chat_id, msg_business, buttons=staff_buttons)
-                clear_pending_for(user_id)
-                return {"ok": True}
-
-            # -------- double_wait_second --------
-            if action == "double_wait_second":
-                hhmm = pending["hhmm"]
-                business_name = pending["business_name"]
-                business_chat_id = pending["business_chat_id"]
-                first_staff = pending["first_staff"]
-                second_staff = text.strip()
-
-                double_staffs[hhmm] = [first_staff, second_staff]
-                staff_list = "、".join(double_staffs[hhmm])
-                send_message(int(business_chat_id), f"👥 雙人服務更新：{staff_list}")
-                clear_pending_for(user_id)
-                return {"ok": True}
-
-            # -------- complete_wait_amount --------
-            if action == "complete_wait_amount":
-                hhmm = pending["hhmm"]
-                business_name = pending["business_name"]
-                business_chat_id = pending["business_chat_id"]
-                staff_list = pending["staff_list"]
-                try:
-                    amount = float(text.strip())
-                except ValueError:
-                    send_message(chat_id, "⚠️ 金額格式錯誤，請輸入數字")
-                    return
-                staff_str = "、".join(staff_list)
-                msg = f"✅ 完成服務通知\n{hhmm} {business_name}\n服務人員: {staff_str}\n金額: {amount}"
-                send_message(chat_id, msg)
-                send_message(int(business_chat_id), msg)
-                clear_pending_for(user_id)
-                return {"ok": True}
-
-            # -------- not_consumed_wait_reason --------
-            if action == "not_consumed_wait_reason":
-                hhmm = pending["hhmm"]
-                name = pending["name"]
-                business_chat_id = pending["business_chat_id"]
-                reason = text.strip()
-                msg = f"⚠️ 未消: {name} {reason}"
-                send_message(chat_id, "掰掰謝謝光臨!!")
-                send_message(int(business_chat_id), msg)
-                clear_pending_for(user_id)
-                return {"ok": True}
-
-            # -------- modify_wait_name --------
-            if action == "modify_wait_name":
-                old_hhmm = pending.get("old_hhmm")
-                old_name = pending.get("old_name")
-                new_hhmm = pending.get("new_hhmm")
-                group_chat = pending.get("group_chat")
-                new_name_input = text
-
-                old_shift = find_shift(data.get("shifts", []), old_hhmm)
-                if not old_shift:
-                    send_message(group_chat, f"⚠️ 原時段 {old_hhmm} 不存在。")
-                    clear_pending_for(user_id)
-                    return
-                booking = next((b for b in old_shift.get("bookings", []) if b.get("name") == old_name and b.get("chat_id") == group_chat), None)
-                if not booking:
-                    send_message(group_chat, f"⚠️ 找不到 {old_hhmm} 的預約 {old_name}。")
-                    clear_pending_for(user_id)
-                    return
-
-                new_shift = find_shift(data.get("shifts", []), new_hhmm)
-                if not new_shift:
-                    send_message(group_chat, f"⚠️ 新時段 {new_hhmm} 不存在。")
-                    clear_pending_for(user_id)
-                    return
-                used_new = len(new_shift.get("bookings", [])) + len([x for x in new_shift.get("in_progress", []) if not str(x).endswith("(候補)")])
-                if used_new >= new_shift.get("limit", 1):
-                    send_message(group_chat, f"⚠️ {new_hhmm} 已滿額，無法修改。")
-                    clear_pending_for(user_id)
-                    return
-
-                old_shift["bookings"] = [b for b in old_shift.get("bookings", []) if not (b.get("name") == old_name and b.get("chat_id") == group_chat)]
-                unique_name = generate_unique_name(new_shift.get("bookings", []), new_name_input)
-                new_shift.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
-                save_json_file(path, data)
-
-                buttons = [
-                    [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
-                    [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
-                ]
-                broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
-                send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
+            booking = next((b for b in old_shift.get("bookings", []) if b.get("name") == old_name and b.get("chat_id") == group_chat), None)
+            if not booking:
+                send_message(group_chat, f"⚠️ 找不到 {old_hhmm} 的預約 {old_name}。")
                 clear_pending_for(user_id)
                 return
-
+            new_shift = find_shift(data.get("shifts", []), new_hhmm)
+            if not new_shift:
+                send_message(group_chat, f"⚠️ 新時段 {new_hhmm} 不存在。")
+                clear_pending_for(user_id)
+                return
+            used_new = len(new_shift.get("bookings", [])) + len([x for x in new_shift.get("in_progress", []) if not str(x).endswith("(候補)")])
+            if used_new >= new_shift.get("limit", 1):
+                send_message(group_chat, f"⚠️ {new_hhmm} 已滿額，無法修改。")
+                clear_pending_for(user_id)
+                return
+            # 移除舊預約
+            old_shift["bookings"] = [b for b in old_shift.get("bookings", []) if not (b.get("name") == old_name and b.get("chat_id") == group_chat)]
+            unique_name = generate_unique_name(new_shift.get("bookings", []), new_name_input)
+            new_shift.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
+            save_json_file(path, data)
+            buttons = [
+                [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+                [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+            ]
+            broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
+            send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
             clear_pending_for(user_id)
             return
 
-        # -------- 指令處理 /help /STAFF /list /管理員 --------
-        if text == "/help":
-            help_text = """
+        # 未知 pending 清除
+        clear_pending_for(user_id)
+        return
+
+    # /help
+    if text == "/help":
+        help_text = """
 📌 *Telegram 預約機器人指令說明* 📌
 
 一般使用者：
@@ -479,105 +509,455 @@ def handle_text_message(msg):
 - /updateshift HH:MM 限制
 - /STAFF 設定本群為服務員群組
 """
-            send_message(chat_id, help_text)
+        send_message(chat_id, help_text)
+        return
+
+    # /STAFF
+    if text.startswith("/STAFF"):
+        user_id = msg.get("from", {}).get("id")
+        if user_id not in ADMIN_IDS:
+            send_message(chat_id, "⚠️ 你沒有權限設定服務員群組")
+            return
+        add_group(chat_id, "group", group_role="staff")
+        send_message(chat_id, "✅ 已將本群組設定為服務員群組")
+        return
+
+    # /list
+    if text == "/list":
+        shift_text = generate_latest_shift_list()
+        buttons = [
+            [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+            [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+        ]
+        send_message(chat_id, shift_text, buttons=buttons)
+        return
+
+    # 管理員文字功能（保留原本刪除 /addshift /updateshift 等）
+    user_id = msg.get("from", {}).get("id")
+    if user_id in ADMIN_IDS:
+        # /addshift HH:MM 限制
+        if text.startswith("/addshift"):
+            parts = text.split()
+            if len(parts) < 3:
+                send_message(chat_id, "⚠️ 格式：/addshift HH:MM 限制")
+                return
+            hhmm, limit = parts[1], int(parts[2])
+            path = ensure_today_file()
+            data = load_json_file(path)
+            if find_shift(data.get("shifts", []), hhmm):
+                send_message(chat_id, f"⚠️ {hhmm} 已存在")
+                return
+            data["shifts"].append({"time": hhmm, "limit": limit, "bookings": [], "in_progress": []})
+            save_json_file(path, data)
+            send_message(chat_id, f"✅ 新增 {hhmm} 時段，限制 {limit} 人")
             return
 
-        if text.startswith("/STAFF"):
-            if user_id not in ADMIN_IDS:
-                send_message(chat_id, "⚠️ 你沒有權限設定服務員群組")
+        # /updateshift HH:MM 限制
+        if text.startswith("/updateshift"):
+            parts = text.split()
+            if len(parts) < 3:
+                send_message(chat_id, "⚠️ 格式：/updateshift HH:MM 限制")
                 return
-            add_group(chat_id, "group", group_role="staff")
-            send_message(chat_id, "✅ 已將本群組設定為服務員群組")
+            hhmm, limit = parts[1], int(parts[2])
+            path = ensure_today_file()
+            data = load_json_file(path)
+            s = find_shift(data.get("shifts", []), hhmm)
+            if not s:
+                send_message(chat_id, f"⚠️ {hhmm} 不存在")
+                return
+            s["limit"] = limit
+            save_json_file(path, data)
+            send_message(chat_id, f"✅ {hhmm} 時段限制已更新為 {limit}")
             return
 
-        if text == "/list":
-            shift_text = generate_latest_shift_list()
-            buttons = [
-                [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
-                [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
-            ]
-            send_message(chat_id, shift_text, buttons=buttons)
-            return
-
-        # 管理員指令
-        if user_id in ADMIN_IDS:
-            if text.startswith("/addshift"):
-                parts = text.split()
-                if len(parts) < 3:
-                    send_message(chat_id, "⚠️ 格式：/addshift HH:MM 限制")
-                    return
-                hhmm, limit = parts[1], int(parts[2])
-                if find_shift(data.get("shifts", []), hhmm):
-                    send_message(chat_id, f"⚠️ {hhmm} 已存在")
-                    return
-                data["shifts"].append({"time": hhmm, "limit": limit, "bookings": [], "in_progress": []})
-                save_json_file(path, data)
-                send_message(chat_id, f"✅ 新增 {hhmm} 時段，限制 {limit} 人")
+        # 刪除指令（同你原本）
+        if text.startswith("刪除"):
+            parts = text.split()
+            if len(parts) < 3:
+                send_message(chat_id, "❗ 格式錯誤\n請輸入：\n刪除 HH:MM 名稱 / 數量 / all")
                 return
-
-            if text.startswith("/updateshift"):
-                parts = text.split()
-                if len(parts) < 3:
-                    send_message(chat_id, "⚠️ 格式：/updateshift HH:MM 限制")
-                    return
-                hhmm, limit = parts[1], int(parts[2])
-                s = find_shift(data.get("shifts", []), hhmm)
-                if not s:
-                    send_message(chat_id, f"⚠️ {hhmm} 不存在")
-                    return
-                s["limit"] = limit
-                save_json_file(path, data)
-                send_message(chat_id, f"✅ {hhmm} 時段限制已更新為 {limit}")
+            hhmm, target = parts[1], " ".join(parts[2:])
+            path = ensure_today_file()
+            data = load_json_file(path)
+            s = find_shift(data.get("shifts", []), hhmm)
+            if not s:
+                send_message(chat_id, f"⚠️ 找不到 {hhmm} 的時段")
                 return
-
-            if text.startswith("刪除"):
-                parts = text.split()
-                if len(parts) < 3:
-                    send_message(chat_id, "❗ 格式錯誤\n請輸入：\n刪除 HH:MM 名稱 / 數量 / all")
-                    return
-                hhmm, target = parts[1], " ".join(parts[2:])
-                s = find_shift(data.get("shifts", []), hhmm)
-                if not s:
-                    send_message(chat_id, f"⚠️ 找不到 {hhmm} 的時段")
-                    return
-                removed_from = None
-                if target.lower() == "all":
-                    count_b = len(s.get("bookings", []))
-                    count_i = len(s.get("in_progress", []))
-                    s["bookings"].clear()
-                    s["in_progress"].clear()
-                    removed_from = "all"
-                elif target.isdigit():
-                    remove_count = int(target)
-                    old_limit = s.get("limit", 1)
-                    s["limit"] = max(0, old_limit - remove_count)
-                    removed_from = "limit"
-                else:
-                    for b in list(s.get("bookings", [])):
-                        if b.get("name") == target:
-                            s["bookings"].remove(b)
-                            removed_from = "bookings"
-                            break
-                    if not removed_from:
-                        for b in list(s.get("in_progress", [])):
-                            if b.get("name") == target:
-                                s["in_progress"].remove(b)
-                                removed_from = "in_progress"
-                                break
-                    if not removed_from:
-                        before_len = len(data.get("候補", []))
-                        data["候補"] = [c for c in data.get("候補", []) if not (c.get("time") == hhmm and c.get("name") == target)]
-                        if len(data["候補"]) < before_len:
-                            removed_from = "候補"
-
+            if target.lower() == "all":
+                count_b = len(s.get("bookings", []))
+                count_i = len(s.get("in_progress", []))
+                s["bookings"].clear()
+                s["in_progress"].clear()
                 save_json_file(path, data)
-                type_label = {"bookings": "未報到", "in_progress": "已報到", "候補": "候補", "all": "所有", "limit": "名額"}[removed_from]
+                send_message(chat_id, f"🧹 已清空 {hhmm} 的所有名單（未報到 {count_b}、已報到 {count_i}）")
+                return
+            if target.isdigit():
+                remove_count = int(target)
+                old_limit = s.get("limit", 1)
+                s["limit"] = max(0, old_limit - remove_count)
+                save_json_file(path, data)
+                send_message(chat_id, f"🗑 已刪除 {hhmm} 的 {remove_count} 個名額（原本 {old_limit} → 現在 {s['limit']}）")
+                return
+            removed_from = None
+            for b in list(s.get("bookings", [])):
+                if b.get("name") == target:
+                    s["bookings"].remove(b)
+                    removed_from = "bookings"
+                    break
+            if not removed_from and target in s.get("in_progress", []):
+                s["in_progress"].remove(target)
+                removed_from = "in_progress"
+            if not removed_from:
+                before_len = len(data.get("候補", []))
+                data["候補"] = [c for c in data.get("候補", []) if not (c.get("time") == hhmm and c.get("name") == target)]
+                if len(data["候補"]) < before_len:
+                    removed_from = "候補"
+            if removed_from:
+                save_json_file(path, data)
+                type_label = {"bookings": "未報到", "in_progress": "已報到", "候補": "候補"}.get(removed_from, "")
                 send_message(chat_id, f"✅ 已從 {hhmm} 移除 {target}（{type_label}）")
-                return
+            else:
+                send_message(chat_id, f"⚠️ {hhmm} 找不到 {target}")
+            return
 
-    except Exception as e:
+# -------------------------------
+# callback_query 處理（按鈕）
+# -------------------------------
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    try:
+        update = request.get_json()
+        # 普通訊息
+        if "message" in update:
+            handle_text_message(update["message"])
+            return {"ok": True}
+
+        # callback_query（按鈕）
+        if "callback_query" in update:
+            cq = update["callback_query"]
+            data = cq.get("data")
+            callback_id = cq.get("id")
+            from_user = cq.get("from", {})
+            user_id = from_user.get("id")
+            user_name = from_user.get("first_name", "")
+            message = cq.get("message", {}) or {}
+            chat = message.get("chat", {}) or {}
+            chat_id = chat.get("id")
+
+            # 主按鈕 main|reserve / arrive / modify / cancel
+            if data and data.startswith("main|"):
+                _, action = data.split("|", 1)
+
+                # -------- 預約：顯示可預約時段（每行 3 個） --------
+                if action == "reserve":
+                    path = ensure_today_file()
+                    datafile = load_json_file(path)
+                    # 只顯示未過時段
+                    shifts = [s for s in datafile.get("shifts", []) if is_future_time(s.get("time", ""))]
+                    rows = []
+                    row = []
+                    for s in shifts:
+                        used = len(s.get("bookings", [])) + len([x for x in s.get("in_progress", []) if not str(x).endswith("(候補)")])
+                        limit = s.get("limit", 1)
+                        if used < limit:
+                            row.append({"text": f"{s['time']} ({limit-used})", "callback_data": f"reserve_pick|{s['time']}"})
+                        else:
+                            row.append({"text": f"{s['time']} (滿)", "callback_data": "noop"})
+                        if len(row) == 3:
+                            rows.append(row); row = []
+                    if row: rows.append(row)
+                    rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
+                    send_message(chat_id, "請選擇要預約的時段：", buttons=rows)
+                    answer_callback(callback_id)
+                    return {"ok": True}
+
+                # -------- 客到：列出該群未報到預約（點選即報到） --------
+                if action == "arrive":
+                    path = ensure_today_file()
+                    datafile = load_json_file(path)
+                    bookings_for_group = []
+                    for s in datafile.get("shifts", []):
+                        for b in s.get("bookings", []):
+                            if b.get("chat_id") == chat_id:
+                                bookings_for_group.append({"time": s["time"], "name": b.get("name")})
+                    if not bookings_for_group:
+                        send_message(chat_id, "目前沒有未報到的預約。")
+                        answer_callback(callback_id)
+                        return {"ok": True}
+                    btns = []
+                    for bk in bookings_for_group:
+                        btns.append({"text": f"{bk['time']} {bk['name']}", "callback_data": f"arrive_select|{bk['time']}|{bk['name']}"})
+                    rows = chunk_list(btns, 2)
+                    rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
+                    send_message(chat_id, "請點選要標記客到的預約：", buttons=rows)
+                    answer_callback(callback_id)
+                    return {"ok": True}
+
+                # -------- 修改預約：列出可修改的預約 --------
+                if action == "modify":
+                    path = ensure_today_file()
+                    datafile = load_json_file(path)
+                    bookings_for_group = []
+                    for s in datafile.get("shifts", []):
+                        for b in s.get("bookings", []):
+                            if b.get("chat_id") == chat_id:
+                                bookings_for_group.append({"time": s["time"], "name": b.get("name")})
+                    if not bookings_for_group:
+                        send_message(chat_id, "目前沒有可修改的預約。")
+                        answer_callback(callback_id)
+                        return {"ok": True}
+                    btns = []
+                    for bk in bookings_for_group:
+                        btns.append({"text": f"{bk['time']} {bk['name']}", "callback_data": f"modify_pick|{bk['time']}|{bk['name']}"})
+                    rows = chunk_list(btns, 1)
+                    rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
+                    send_message(chat_id, "請選擇要修改的預約：", buttons=rows)
+                    answer_callback(callback_id)
+                    return {"ok": True}
+
+                # -------- 取消預約：列出可取消的預約 --------
+                if action == "cancel":
+                    path = ensure_today_file()
+                    datafile = load_json_file(path)
+                    bookings_for_group = []
+                    for s in datafile.get("shifts", []):
+                        for b in s.get("bookings", []):
+                            if b.get("chat_id") == chat_id:
+                                bookings_for_group.append({"time": s["time"], "name": b.get("name")})
+                    if not bookings_for_group:
+                        send_message(chat_id, "目前沒有可取消的預約。")
+                        answer_callback(callback_id)
+                        return {"ok": True}
+                    btns = []
+                    for bk in bookings_for_group:
+                        btns.append({"text": f"{bk['time']} {bk['name']}", "callback_data": f"cancel_pick|{bk['time']}|{bk['name']}"})
+                    rows = chunk_list(btns, 1)
+                    rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
+                    send_message(chat_id, "請選擇要取消的預約：", buttons=rows)
+                    answer_callback(callback_id)
+                    return {"ok": True}
+
+            # -------- 選擇欲預約的時段（reserve_pick|HH:MM） -> 設定 pending 等待名字輸入 --------
+            if data and data.startswith("reserve_pick|"):
+                _, hhmm = data.split("|", 1)
+                # 設定 pending（以使用者 id 為 key，避免群內多人互相影響）
+                set_pending_for(user_id, {"action": "reserve_wait_name", "hhmm": hhmm, "group_chat": chat_id})
+                send_message(chat_id, f"✏️ 請在此群輸入欲預約的/姓名（針對 {hhmm}）。\n輸入後即完成預約。")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # -------- 客到選擇（arrive_select|HH:MM|name） -> 直接標記 in_progress --------
+            if data and data.startswith("arrive_select|"):
+                parts = data.split("|", 2)
+                if len(parts) < 3:
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
+                _, hhmm, name = parts
+
+                # 設定 pending 等待輸入金額
+                set_pending_for(user_id, {
+                    "action": "arrive_wait_amount",
+                    "hhmm": hhmm,
+                    "name": name,
+                    "group_chat": chat_id
+                })
+                send_message(chat_id, f"✏️ 請輸入 {hhmm} {name} 的金額（數字）：")
+                answer_callback(callback_id)
+                return {"ok": True}
+                # 找 booking（需 match chat_id）
+                booking = next((b for b in s.get("bookings", []) if b.get("name") == name and b.get("chat_id") == chat_id), None)
+                if booking:
+                    s.setdefault("in_progress", []).append(name)
+                    s["bookings"] = [b for b in s.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == chat_id)]
+                    save_json_file(path, datafile)
+                    send_message(chat_id, f"✅ {hhmm} {name} （已報到）")
+                    answer_callback(callback_id)
+                    return {"ok": True}
+                else:
+                    answer_callback(callback_id, "找不到該預約或已被移除")
+                    return {"ok": True}
+
+            # -------- modify pick：選擇欲修改的預約（modify_pick|oldHH:MM|oldName） -> 顯示新時段按鈕 --------
+            if data and data.startswith("modify_pick|"):
+                parts = data.split("|", 2)
+                if len(parts) < 3:
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
+                _, old_hhmm, old_name = parts
+                path = ensure_today_file()
+                datafile = load_json_file(path)
+                shifts = [s for s in datafile.get("shifts", []) if is_future_time(s.get("time",""))]
+                rows = []
+                row = []
+                for s in shifts:
+                    row.append({"text": s["time"], "callback_data": f"modify_to|{old_hhmm}|{old_name}|{s['time']}"})
+                    if len(row) == 3:
+                        rows.append(row); row = []
+                if row: rows.append(row)
+                rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
+                send_message(chat_id, f"要將 {old_hhmm} {old_name} 修改到哪個時段？", buttons=rows)
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # -------- modify_to：選好新時段（modify_to|old|oldname|new） -> 要求輸入新姓名或同名 --------
+            if data and data.startswith("modify_to|"):
+                parts = data.split("|", 3)
+                if len(parts) < 4:
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
+                _, old_hhmm, old_name, new_hhmm = parts
+                # 設成 pending 等待使用者輸入新名字
+                set_pending_for(user_id, {"action": "modify_wait_name", "old_hhmm": old_hhmm, "old_name": old_name, "new_hhmm": new_hhmm, "group_chat": chat_id})
+                send_message(chat_id, f"請輸入新的姓名（或輸入原姓名 `{old_name}` 保留）以完成從 {old_hhmm} → {new_hhmm} 的修改：")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # -------- cancel pick：確認取消（cancel_pick|HH:MM|name） -> 顯示確認按鈕 --------
+            if data and data.startswith("cancel_pick|"):
+                parts = data.split("|", 2)
+                if len(parts) < 3:
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
+                _, hhmm, name = parts
+                buttons = [[
+                    {"text": "確認取消", "callback_data": f"confirm_cancel|{hhmm}|{name}"},
+                    {"text": "取消", "callback_data": "cancel_flow"}
+                ]]
+                send_message(chat_id, f"確定要取消 {hhmm} {name} 的預約嗎？", buttons=buttons)
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # -------- confirm_cancel：執行取消 --------
+            if data and data.startswith("confirm_cancel|"):
+                parts = data.split("|", 2)
+                if len(parts) < 3:
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
+                _, hhmm, name = parts
+                path = ensure_today_file()
+                datafile = load_json_file(path)
+                s = find_shift(datafile.get("shifts", []), hhmm)
+                if not s:
+                    answer_callback(callback_id, "找不到該時段")
+                    return {"ok": True}
+                # 只刪除屬於該群的預約（chat_id)
+                before_len = len(s.get("bookings", []))
+                s["bookings"] = [b for b in s.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == chat_id)]
+                save_json_file(path, datafile)
+                buttons = [
+                    [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+                    [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+                ]
+                broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
+
+                send_message(chat_id, f"✅ 已取消 {hhmm} {name} 的預約")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # cancel_flow or noop
+            if data in ("cancel_flow", "noop"):
+                answer_callback(callback_id, "已取消")
+                return {"ok": True}
+            
+            # staff_up -> 通知業務 + 顯示服務員按鈕
+            if data and data.startswith("staff_up|"):
+                _, hhmm, name, business_chat_id = data.split("|", 3)
+                send_message(int(business_chat_id), f"⬆️ 上 {hhmm} {name}")
+
+                staff_buttons = [[
+                    {"text": "輸入客資", "callback_data": f"input_client|{hhmm}|{name}|{business_chat_id}"},
+                    {"text": "未消", "callback_data": f"not_consumed|{hhmm}|{name}|{business_chat_id}"}
+                ]]
+                send_message(chat_id, f"✅ 已通知業務 {name}", buttons=staff_buttons)
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # 服務員 -> 輸入客資
+            if data and data.startswith("input_client|"):
+                _, hhmm, name, business_chat_id = data.split("|", 3)
+                set_pending_for(user_id, {
+                    "action": "input_client",
+                    "hhmm": hhmm,
+                    "business_name": name,
+                    "business_chat_id": business_chat_id
+                })
+                send_message(chat_id, "✏️ 請輸入客稱、年紀、服務人員與金額（格式：小帥 25 小美 3000）")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # 服務員 -> 未消
+            if data and data.startswith("not_consumed|"):
+                _, hhmm, name, business_chat_id = data.split("|", 3)
+                set_pending_for(user_id, {
+                    "action": "not_consumed_wait_reason",
+                    "hhmm": hhmm,
+                    "name": name,
+                    "business_chat_id": business_chat_id
+                })
+                send_message(chat_id, "✏️ 請輸入未消原因：")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # 雙人服務（按鈕觸發）
+            if data and data.startswith("double|"):
+                _, hhmm, business_name, business_chat_id = data.split("|")
+                first_staff = get_staff_name(user_id)
+
+                # 設定 pending 等待輸入第二位服務員
+                set_pending_for(user_id, {
+                    "action": "double_wait_second",
+                    "hhmm": hhmm,
+                    "business_name": business_name,
+                    "business_chat_id": business_chat_id,
+                    "first_staff": first_staff
+                })
+
+                send_message(chat_id, f"✏️ 請輸入另一位服務員名字，與 {first_staff} 配合雙人服務")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # 完成服務
+            if data and data.startswith("complete|"):
+                _, hhmm, business_name, business_chat_id = data.split("|", 3)
+
+                # 支援雙人服務
+                staff_list = double_staffs.get(hhmm, [get_staff_name(user_id)])
+                staff_str = "、".join(staff_list)
+
+                # 設 pending 等待輸入實際金額
+                set_pending_for(user_id, {
+                    "action": "complete_wait_amount",
+                    "hhmm": hhmm,
+                    "business_name": business_name,
+                    "business_chat_id": business_chat_id,
+                    "staff_list": staff_list
+                })
+
+                send_message(chat_id, f"✏️ 請輸入 {hhmm} {business_name} 的總金額（數字）：")
+                answer_callback(callback_id)
+                return {"ok": True} 
+
+            # 修正 -> 重新輸入客資
+            if data and data.startswith("fix|"):
+                _, hhmm, business_name, business_chat_id = data.split("|", 3)
+                set_pending_for(user_id, {
+                    "action": "input_client",
+                    "hhmm": hhmm,
+                    "business_name": business_name,
+                    "business_chat_id": business_chat_id
+                })
+                send_message(chat_id, "✏️ 請重新輸入客資（格式：小美 25 Alice 3000）")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # 沒有匹配的 callback
+            answer_callback(callback_id, "操作已接收。")
+            return {"ok": True}
+
+    except Exception:
         traceback.print_exc()
-        send_message(chat_id, f"❌ 發生錯誤: {str(e)}")
+    return {"ok": True}
+
 # -------------------------------
 # 自動整點公告
 # -------------------------------
