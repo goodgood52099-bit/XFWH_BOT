@@ -609,7 +609,7 @@ def webhook():
                 _, hhmm = data.split("|", 1)
                 # 設定 pending（以使用者 id 為 key，避免群內多人互相影響）
                 set_pending_for(user_id, {"action": "reserve_wait_name", "hhmm": hhmm, "group_chat": chat_id})
-                send_message(chat_id, f"✏️ 請在此群輸入欲預約的姓名（針對 {hhmm}）。\n輸入後即完成預約。")
+                send_message(chat_id, f"✏️ 請在此群輸入欲預約的/姓名（針對 {hhmm}）。\n輸入後即完成預約。")
                 answer_callback(callback_id)
                 return {"ok": True}
 
@@ -732,8 +732,15 @@ def auto_announce():
         now = datetime.now(TZ)
         if 12 <= now.hour <= 22 and now.minute == 0:
             try:
-                # 只公告給 business 群組（業務群）
-                broadcast_to_groups(generate_latest_shift_list(), group_type="business")
+                text = generate_latest_shift_list()
+                # 建立按鈕（同 /list）
+                buttons = [
+                    [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+                    [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+                ]
+                gids = get_group_ids_by_type("business")
+                for gid in gids:
+                    send_message(gid, text, buttons=buttons)
             except:
                 traceback.print_exc()
             time.sleep(60)
