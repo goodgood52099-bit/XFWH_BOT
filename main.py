@@ -799,50 +799,35 @@ def webhook():
             if data in ("cancel_flow", "noop"):
                 answer_callback(callback_id, "已取消")
                 return {"ok": True}
-
-            # fallback
-            answer_callback(callback_id, "操作已接收。")
-            return {"ok": True}
-            elif "callback_query" in req_json:
-            callback = req_json["callback_query"]
-            data = callback.get("data")
-            callback_id = callback["id"]
-            chat_id = callback["message"]["chat"]["id"]
-            user_id = callback["from"]["id"]
+            
+            # staff_up -> 通知業務 + 顯示服務員按鈕
             if data and data.startswith("staff_up|"):
                 _, hhmm, name, business_chat_id = data.split("|", 3)
+                send_message(int(business_chat_id), f"📌 上 {hhmm} {name}")
 
-                # 1️⃣ 通知業務群組
-                msg = f"📌 上 {hhmm} {name}"
-                send_message(int(business_chat_id), msg)
-
-                # 2️⃣ 回覆服務員群組訊息，附加按鈕
-                staff_buttons = [
-                    [
-                        {"text": "輸入客資", "callback_data": f"input_client|{hhmm}|{name}|{business_chat_id}"},
-                        {"text": "未消", "callback_data": f"not_consumed|{hhmm}|{name}|{business_chat_id}"}
-                    ]
-                ]
-                send_message(chat_id, f"✅ 已通知業務 {name} ", buttons=staff_buttons)
-
-                answer_callback(callback_id, "操作完成")
+                staff_buttons = [[
+                    {"text": "輸入客資", "callback_data": f"input_client|{hhmm}|{name}|{business_chat_id}"},
+                    {"text": "未消", "callback_data": f"not_consumed|{hhmm}|{name}|{business_chat_id}"}
+                ]]
+                send_message(chat_id, f"✅ 已通知業務 {name}", buttons=staff_buttons)
+                answer_callback(callback_id)
                 return {"ok": True}
-            # 服務員上 -> 輸入客資
-            if data.startswith("input_client|"):
+
+            # 服務員 -> 輸入客資
+            if data and data.startswith("input_client|"):
                 _, hhmm, name, business_chat_id = data.split("|", 3)
-                # 改成帶業務名參數
                 set_pending_for(user_id, {
                     "action": "input_client",
                     "hhmm": hhmm,
                     "business_name": name,
                     "business_chat_id": business_chat_id
                 })
-                send_message(chat_id, f"✏️ 請輸入客稱、年紀、服務人員與金額（格式：小美25 Alice 3000）")
+                send_message(chat_id, "✏️ 請輸入客稱、年紀、服務人員與金額（格式：小美25 Alice 3000）")
                 answer_callback(callback_id)
                 return {"ok": True}
 
-            # 服務員上 -> 未消
-            if data.startswith("not_consumed|"):
+            # 服務員 -> 未消
+            if data and data.startswith("not_consumed|"):
                 _, hhmm, name, business_chat_id = data.split("|", 3)
                 set_pending_for(user_id, {
                     "action": "not_consumed_reason",
@@ -853,46 +838,53 @@ def webhook():
                 send_message(chat_id, "✏️ 請輸入未消原因：")
                 answer_callback(callback_id)
                 return {"ok": True}
-            if "callback_query" in req_json:
-                cb = req_json["callback_query"]
-                data = cb["data"]
-                chat_id = cb["message"]["chat"]["id"]
-                message_id = cb["message"]["message_id"]
-                user_id = cb["from"]["id"]
 
-                parts = data.split("|")
-                action = parts[0]
-                hhmm = parts[1]
-                business_name = parts[2]
-                business_chat_id = int(parts[3])
-
-            if action == "double":
-                # 取得當前使用者名稱
+            # 雙人服務
+            if data and data.startswith("double|"):
+                _, hhmm, business_name, business_chat_id = data.split("|", 3)
                 staff_name = get_staff_name(user_id)
 
-                # 檢查是否已有第一位雙人服務員
                 if hhmm not in double_staffs:
                     double_staffs[hhmm] = [staff_name]
-                    edit_message(chat_id, message_id, f"✅ {staff_name} 已加入雙人服務\n目前服務人員: {staff_name}")
+                    send_message(chat_id, f"✅ {staff_name} 已加入雙人服務（目前 1 人）")
                 else:
-                    # 加第二位，避免重複
                     if staff_name in double_staffs[hhmm]:
-                        edit_message(chat_id, message_id, f"❌ {staff_name} 已經被選為雙人服務")
+                        send_message(chat_id, f"❌ {staff_name} 已重複")
                     else:
                         double_staffs[hhmm].append(staff_name)
                         staff_list = "、".join(double_staffs[hhmm])
-                        edit_message(chat_id, message_id, f"✅ 雙人服務確認\n{hhmm} {client_name} {age}  {business_name} {amount}\n服務人員: {staff_list}")
+                        send_message(chat_id, f"✅ 雙人服務確認\n時段: {hhmm}\n業務: {business_name}\n服務人員: {staff_list}")
+                answer_callback(callback_id)
+                return {"ok": True}
 
-            elif action == "complete":
-                    # 完成服務，記錄實際金額，並通知業務
-                    actual_amount = get_actual_amount(user_id, hhmm)
-                    edit_message(chat_id, message_id, f"✅ 完成服務通知\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}\n金額: {actual_amount}")
-                    send_message(business_chat_id, f"✅ 完成服務通知\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}\n金額: {actual_amount}")
+            # 完成服務
+            if data and data.startswith("complete|"):
+                _, hhmm, business_name, business_chat_id = data.split("|", 3)
+                staff_name = get_staff_name(user_id)
+                actual_amount = get_actual_amount(user_id, hhmm)
 
-            elif action == "fix":
-                    # 重新輸入客資
-                    set_pending_for(user_id, action="input_client", hhmm=hhmm, business_name=business_name, business_chat_id=business_chat_id)
-                    edit_message(chat_id, message_id, "✏️ 請重新輸入客資，格式：小美 25 Alice 3000")
+                msg = f"✅ 完成服務通知\n{hhmm} {business_name}\n服務人員: {staff_name}\n金額: {actual_amount}"
+                send_message(chat_id, msg)
+                send_message(int(business_chat_id), msg)
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # 修正 -> 重新輸入客資
+            if data and data.startswith("fix|"):
+                _, hhmm, business_name, business_chat_id = data.split("|", 3)
+                set_pending_for(user_id, {
+                    "action": "input_client",
+                    "hhmm": hhmm,
+                    "business_name": business_name,
+                    "business_chat_id": business_chat_id
+                })
+                send_message(chat_id, "✏️ 請重新輸入客資（格式：小美25 Alice 3000）")
+                answer_callback(callback_id)
+                return {"ok": True}
+
+            # 沒有匹配的 callback
+            answer_callback(callback_id, "操作已接收。")
+            return {"ok": True}
 
     except Exception:
         traceback.print_exc()
