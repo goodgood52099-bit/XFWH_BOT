@@ -155,11 +155,11 @@ def answer_callback(callback_id, text=None, show_alert=False):
     payload["show_alert"] = show_alert
     return send_request("answerCallbackQuery", payload)
 
-def broadcast_to_groups(message, group_type=None):
+def broadcast_to_groups(message, group_type=None, buttons=None):
     gids = get_group_ids_by_type(group_type)
     for gid in gids:
         try:
-            send_message(gid, message)
+            send_message(gid, message, buttons=buttons)
         except Exception:
             traceback.print_exc()
 
@@ -314,7 +314,11 @@ def handle_text_message(msg):
             save_json_file(path, data)
 
             send_message(group_chat, f"✅ {unique_name} 已預約 {hhmm}")
-            broadcast_to_groups(generate_latest_shift_list(), group_type="business")
+            buttons = [
+                [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+                [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+            ]
+            broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
             clear_pending_for(user_id)
             return
 
@@ -350,7 +354,11 @@ def handle_text_message(msg):
             unique_name = generate_unique_name(new_shift.get("bookings", []), new_name_input)
             new_shift.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
             save_json_file(path, data)
-            broadcast_to_groups(generate_latest_shift_list(), group_type="business")
+            buttons = [
+                [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+                [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+            ]
+            broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
             send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
             clear_pending_for(user_id)
             return
@@ -706,7 +714,12 @@ def webhook():
                 before_len = len(s.get("bookings", []))
                 s["bookings"] = [b for b in s.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == chat_id)]
                 save_json_file(path, datafile)
-                broadcast_to_groups(generate_latest_shift_list(), group_type="business")
+                buttons = [
+                    [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+                    [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+                ]
+                broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
+
                 send_message(chat_id, f"✅ 已取消 {hhmm} {name} 的預約")
                 answer_callback(callback_id)
                 return {"ok": True}
@@ -738,9 +751,7 @@ def auto_announce():
                     [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
                     [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
                 ]
-                gids = get_group_ids_by_type("business")
-                for gid in gids:
-                    send_message(gid, text, buttons=buttons)
+                broadcast_to_groups(text, group_type="business", buttons=buttons)
             except:
                 traceback.print_exc()
             time.sleep(60)
