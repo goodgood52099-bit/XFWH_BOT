@@ -352,9 +352,9 @@ def handle_text_message(msg):
 
                 send_message(group_chat, f"✅ {hhmm} {name} 已標記到場，金額：{amount}")
                 # ➡️ 新增：通知所有服務員群組
-               staff_message = f"📌 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
-               staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
-               broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
+                staff_message = f"📌 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
+                staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
+                broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
 
             else:
                 send_message(group_chat, f"⚠️ 找不到預約 {name} 或已被移除")
