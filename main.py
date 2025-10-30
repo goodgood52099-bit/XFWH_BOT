@@ -13,21 +13,22 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo  # pip install backports.zoneinfo
 
 # -------------------------------
-# 基本設定
+# 設定區
 # -------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("❌ 請設定 BOT_TOKEN 環境變數")
+    raise ValueError("❌ 請在 Render/Zeabur 環境變數設定 BOT_TOKEN")
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-app = Flask(__name__)
-TZ = ZoneInfo("Asia/Taipei")
-ADMIN_IDS = [7236880214, 7807558825, 7502175264]  # modify if needed
-
-GROUP_FILE = os.path.join(DATA_DIR, "groups.json")
 PENDING_FILE = os.path.join(DATA_DIR, "pending.json")
+GROUP_FILE = os.path.join(DATA_DIR, "groups.json")
+
+app = Flask(__name__)
+ADMIN_IDS = [7236880214, 7807558825, 7502175264]  # 管理員 Telegram ID，自行修改
+TZ = ZoneInfo("Asia/Taipei")  # 台灣時區
+
 asked_shifts = set()
 
 # -------------------------------
@@ -59,7 +60,7 @@ def clear_pending_for(user_id):
         save_pending(p)
 
 # -------------------------------
-# 群組管理（支援 staff / business）
+# 群組管理
 # -------------------------------
 def load_groups():
     if os.path.exists(GROUP_FILE):
@@ -71,10 +72,11 @@ def save_groups(groups):
     with open(GROUP_FILE, "w", encoding="utf-8") as f:
         json.dump(groups, f, ensure_ascii=False, indent=2)
 
+# group_role: "staff" or "business"
 def add_group(chat_id, chat_type, group_role="business"):
     groups = load_groups()
     for g in groups:
-        if g.get("id") == chat_id:
+        if g["id"] == chat_id:
             g["type"] = group_role
             save_groups(groups)
             return
@@ -89,31 +91,28 @@ def get_group_ids_by_type(group_type=None):
     return [g["id"] for g in groups]
 
 # -------------------------------
-# 每日資料檔（data/YYYY-MM-DD.json）
+# JSON 存取（每日檔）
 # -------------------------------
 def data_path_for(day): return os.path.join(DATA_DIR, f"{day}.json")
 
 def load_json_file(path, default=None):
     if not os.path.exists(path): return default or {}
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    with open(path, "r", encoding="utf-8") as f: return json.load(f)
 
 def save_json_file(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
 def ensure_today_file(workers=3):
     today = datetime.now(TZ).date().isoformat()
     path = data_path_for(today)
     now = datetime.now(TZ)
-    # 如果檔案存在但日期不對（意外），重新建立
     if os.path.exists(path):
         data = load_json_file(path)
         if data.get("date") != today:
             os.remove(path)
     if not os.path.exists(path):
         shifts = []
-        # 13:00 ~ 22:00
+        # 13:00 ~ 22:00 (可按需修改)
         for h in range(13, 23):
             shift_time = dt_time(h, 0)
             shift_dt = datetime.combine(datetime.now(TZ).date(), shift_time).replace(tzinfo=TZ)
@@ -124,7 +123,7 @@ def ensure_today_file(workers=3):
 
 def find_shift(shifts, hhmm):
     for s in shifts:
-        if s.get("time") == hhmm:
+        if s["time"] == hhmm:
             return s
     return None
 
@@ -138,14 +137,10 @@ def is_future_time(hhmm):
         return False
 
 # -------------------------------
-# Telegram 傳送與 utils
+# Telegram 發送（支援按鈕）
 # -------------------------------
 def send_request(method, payload):
-    try:
-        return requests.post(API_URL + method, json=payload, timeout=10).json()
-    except Exception as e:
-        print("send_request error:", e)
-        return {}
+    return requests.post(API_URL + method, json=payload).json()
 
 def send_message(chat_id, text, buttons=None, parse_mode="Markdown"):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
@@ -169,29 +164,72 @@ def broadcast_to_groups(message, group_type=None):
             traceback.print_exc()
 
 # -------------------------------
-# 顯示最新時段文字
+# 生成最新時段列表（文字）
 # -------------------------------
 def generate_latest_shift_list():
     path = ensure_today_file()
     data = load_json_file(path)
+    msg_lines = []
+    checked_in_lines = []
     now = datetime.now(TZ)
-    lines = []
-    shifts = sorted(data.get("shifts", []), key=lambda x: x.get("time","00:00"))
+
+    shifts = sorted(data.get("shifts", []), key=lambda s: s.get("time", "00:00"))
+
     for s in shifts:
         time_label = s["time"]
-        if not is_future_time(time_label): continue
-        bookings = [b.get("name") for b in s.get("bookings", [])]
-        inprog = [x for x in s.get("in_progress", []) if not str(x).endswith("(候補)")]
-        remain = s.get("limit", 1) - (len(bookings) + len(inprog))
-        lines.append(f"{time_label} ｜ 預約：{'、'.join(bookings) if bookings else '（空）'} ｜ 已報到：{len(inprog)} ｜ 剩餘：{remain}")
-    if not lines:
-        return "📅 今日沒有可預約時段或時段已過"
-    return "📅 今日最新時段列表：\n" + "\n".join(lines)
+        limit = s.get("limit", 1)
+        bookings = s.get("bookings", [])
+        in_progress = s.get("in_progress", [])
+
+        shift_dt = datetime.combine(now.date(), datetime.strptime(time_label, "%H:%M").time()).replace(tzinfo=TZ)
+        shift_is_past = shift_dt < now
+
+        regular_in_progress = [x for x in in_progress if not str(x).endswith("(候補)")]
+        backup_in_progress = [x for x in in_progress if str(x).endswith("(候補)")]
+
+        for name in regular_in_progress:
+            checked_in_lines.append(f"{time_label} {name} ✅")
+        for name in backup_in_progress:
+            checked_in_lines.append(f"{time_label} {name} ✅")
+
+        for b in bookings:
+            name = b.get("name") if isinstance(b, dict) else b
+            msg_lines.append(f"{time_label} {name}")
+
+        used_slots = len(bookings) + len(regular_in_progress)
+        remaining = max(0, limit - used_slots)
+
+        if not shift_is_past:
+            for _ in range(remaining):
+                msg_lines.append(f"{time_label} ")
+
+    if not msg_lines and not checked_in_lines:
+        return "📅 今日所有時段已過"
+
+    text = "📅 今日最新時段列表（未到時段）：\n"
+    text += "\n".join(msg_lines) if msg_lines else "（目前無未到時段）"
+    if checked_in_lines:
+        text += "\n\n【已報到】\n" + "\n".join(checked_in_lines)
+
+    return text
 
 # -------------------------------
-# 小工具（構建按鈕）
+# 工具函數：生成唯一名稱
+# -------------------------------
+def generate_unique_name(bookings, base_name):
+    existing = [b["name"] for b in bookings if isinstance(b, dict)]
+    if base_name not in existing:
+        return base_name
+    idx = 2
+    while f"{base_name}({idx})" in existing:
+        idx += 1
+    return f"{base_name}({idx})"
+
+# -------------------------------
+# UI helpers for inline keyboards
 # -------------------------------
 def chunk_list(lst, n):
+    """split list into rows of len n"""
     return [lst[i:i+n] for i in range(0, len(lst), n)]
 
 def build_shifts_buttons(shifts, row_size=3):
@@ -199,8 +237,23 @@ def build_shifts_buttons(shifts, row_size=3):
     for s in shifts:
         btns.append({"text": s["time"], "callback_data": f"reserve|{s['time']}"})
     rows = chunk_list(btns, row_size)
+    # add cancel row
     rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
     return rows
+
+def build_bookings_buttons(bookings, chat_id, prefix):
+    # bookings: list of dict {"name":..., "chat_id": ...}
+    btns = []
+    for b in bookings:
+        name = b.get("name")
+        # encode chat id so we know which group original booking belongs to (bookings store chat_id)
+        btns.append({"text": name, "callback_data": f"{prefix}|{name}"})
+    if not btns:
+        btns = [{"text": "（無）", "callback_data": "noop"}]
+    # add cancel
+    btns_rows = chunk_list(btns, 2)
+    btns_rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
+    return btns_rows
 
 # -------------------------------
 # message 處理（文字）
@@ -654,13 +707,14 @@ def webhook():
     return {"ok": True}
 
 # -------------------------------
-# 自動整點公告（只廣播給業務群 business）
+# 自動整點公告
 # -------------------------------
 def auto_announce():
     while True:
         now = datetime.now(TZ)
         if 12 <= now.hour <= 22 and now.minute == 0:
             try:
+                # 只公告給 business 群組（業務群）
                 broadcast_to_groups(generate_latest_shift_list(), group_type="business")
             except:
                 traceback.print_exc()
@@ -668,7 +722,7 @@ def auto_announce():
         time.sleep(10)
 
 # -------------------------------
-# 自動詢問預約者是否到場（整點，針對每個時段會發到該群）
+# 自動詢問預約者是否到場
 # -------------------------------
 def ask_arrivals_thread():
     global asked_shifts
@@ -685,6 +739,7 @@ def ask_arrivals_thread():
                 for s in data.get("shifts", []):
                     if s.get("time") != current_hm:
                         continue
+
                     waiting = []
                     groups_to_notify = set()
                     for b in s.get("bookings", []):
@@ -693,15 +748,18 @@ def ask_arrivals_thread():
                         if name not in s.get("in_progress", []):
                             waiting.append(name)
                             groups_to_notify.add(gid)
+
                     if waiting:
                         names_text = "、".join(waiting)
-                        text = f"⏰ 現在是 {current_hm}\n請問預約的「{names_text}」到了嗎？\n到了請使用按鈕 /list → 客到，或回覆：客到 {current_hm} 名稱"
+                        text = f"⏰ 現在是 {current_hm}\n請問預約的「{names_text}」到了嗎？\n到了請回覆：客到 {current_hm} 名稱 或使用按鈕 /list → 客到"
                         for gid in groups_to_notify:
                             send_message(gid, text)
+
             asked_shifts.add(key)
 
         if now.hour == 0 and now.minute == 1:
             asked_shifts.clear()
+
         time.sleep(10)
 
 # -------------------------------
