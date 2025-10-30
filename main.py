@@ -279,22 +279,40 @@ def handle_text_message(msg):
         # -------- reserve_wait_name --------
         if action == "reserve_wait_name":
             hhmm = pending.get("hhmm")
-            group_chat = pending.get("group_chat")  # where booking will be recorded
-            name_input = text
-            s = find_shift(data.get("shifts", []), hhmm)
+            group_chat = pending.get("group_chat")  # 記錄預約的群組
+            name_input = text.strip()  # 使用者輸入業務名
+
+            # 確保今天檔案存在
+            path = ensure_today_file()
+            data = load_json_file(path)
+
+            # 尋找對應時段
+            s = next((s for s in data.get("shifts", []) if s.get("time") == hhmm), None)
             if not s:
                 send_message(group_chat, f"⚠️ 時段 {hhmm} 不存在或已過期。")
                 clear_pending_for(user_id)
                 return
-            # check slots (exclude 候補)
+
+            # 計算未滿額（排除候補）
             used = len(s.get("bookings", [])) + len([x for x in s.get("in_progress", []) if not str(x).endswith("(候補)")])
-            if used >= s.get("limit", 1):
+            limit = s.get("limit", 1)
+            if used >= limit:
                 send_message(group_chat, f"⚠️ {hhmm} 已滿額，無法預約。")
                 clear_pending_for(user_id)
                 return
-            unique_name = generate_unique_name(s.get("bookings", []), name_input)
+
+            # 生成唯一名稱，避免重名
+            existing_names = [b["name"] for b in s.get("bookings", []) if isinstance(b, dict)]
+            unique_name = name_input
+            idx = 2
+            while unique_name in existing_names:
+                unique_name = f"{name_input}({idx})"
+                idx += 1
+
+            # 新增預約
             s.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
             save_json_file(path, data)
+
             send_message(group_chat, f"✅ {unique_name} 已預約 {hhmm}")
             broadcast_to_groups(generate_latest_shift_list(), group_type="business")
             clear_pending_for(user_id)
