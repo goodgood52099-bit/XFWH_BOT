@@ -189,10 +189,18 @@ def generate_latest_shift_list():
         regular_in_progress = [x for x in in_progress if not str(x).endswith("(候補)")]
         backup_in_progress = [x for x in in_progress if str(x).endswith("(候補)")]
 
-        for name in regular_in_progress:
-            checked_in_lines.append(f"{time_label} {name} ✅")
-        for name in backup_in_progress:
-            checked_in_lines.append(f"{time_label} {name} ✅")
+        for item in regular_in_progress:
+            if isinstance(item, dict):
+                checked_in_lines.append(f"{time_label} {item['name']} ✅ ")
+            else:
+                checked_in_lines.append(f"{time_label} {item} ✅")
+
+        for item in backup_in_progress:
+            if isinstance(item, dict):
+                checked_in_lines.append(f"{time_label} {item['name']} ✅ (候補)")
+            else:
+                checked_in_lines.append(f"{time_label} {item} ✅ (候補)")
+
 
         for b in bookings:
             name = b.get("name") if isinstance(b, dict) else b
