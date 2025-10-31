@@ -293,8 +293,6 @@ def handle_text_message(msg):
     user = msg.get("from", {})
     user_id = user.get("id")
     user_name = user.get("first_name", "")
-    print(f"DEBUG handle_text_message: {user_name}({user_id}) 在 {chat_id} 發訊息: {text}")
-    print(f"DEBUG raw text repr: {repr(text)}")  # ← 新增這行
 
     # ----------------- 自動清理過期 pending（3 分鐘） -----------------
     try:
@@ -331,17 +329,15 @@ def handle_text_message(msg):
         send_message(chat_id, "✅ 已將本群組設定為服務員群組")
         return
 
-    if text.strip().lower() == "/list":
-        print("✅ DEBUG: /list 被觸發")
-        try:
-            print(f"✅ DEBUG: 準備發送測試訊息到群組 {chat_id}")
-            res = send_message(chat_id, "✅ /list 測試成功！這是從伺服器發出的訊息。")
-            print("✅ DEBUG send_message response:", res)
-        except Exception as e:
-            import traceback
-            print("❌ DEBUG: /list 執行錯誤:", e)
-            print(traceback.format_exc())
+    if text == "/list":
+        shift_text = generate_latest_shift_list() 
+        buttons = [
+            [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
+            [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+        ]
+        send_message(chat_id, shift_text, buttons=buttons)
         return
+
 
     if user_id in ADMIN_IDS:
         handle_admin_text(chat_id, text)
