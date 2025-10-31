@@ -256,6 +256,31 @@ def build_bookings_buttons(bookings, chat_id, prefix):
     btns_rows = chunk_list(btns, 2)
     btns_rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
     return btns_rows
+# -------------------------------
+# DEBUG
+# -------------------------------    
+def handle_text_message_debug(msg):
+    text = msg.get("text", "").strip() if msg.get("text") else ""
+    chat = msg.get("chat", {})
+    chat_id = chat.get("id")
+    chat_type = chat.get("type")
+    user = msg.get("from", {})
+    user_id = user.get("id")
+    user_name = user.get("first_name", "")
+
+    print(f"DEBUG handle_text_message: {user_name}({user_id}) 在 {chat_id} 發訊息: {text}")
+
+    # 測試 /list
+    if text.lower().startswith("/list"):
+        send_message(chat_id, "✅ DEBUG: /list 被觸發")
+        return
+
+    # 測試 /STAFF
+    if text.lower().startswith("/staff"):
+        send_message(chat_id, f"✅ DEBUG: /STAFF 被觸發 (原本 user_id={user_id})")
+        return
+
+    send_message(chat_id, f"💡 DEBUG: 收到訊息: {text}")
 
 # -------------------------------
 # 文字訊息處理入口
@@ -822,8 +847,9 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 def webhook():
     try:
         update = request.json
+        print("DEBUG webhook 收到:", update)  # <- 新增 debug
         if "message" in update:
-            handle_text_message(update["message"])
+            handle_text_message_debug(update["message"])  # <- 改成 debug 版本
         elif "callback_query" in update:
             cq = update["callback_query"]
             handle_callback_query(cq)
