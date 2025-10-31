@@ -539,7 +539,6 @@ def handle_input_client(user_id, chat_id, text, pending):
     hhmm = pending["hhmm"]
     business_name = pending["business_name"]
     business_chat_id = pending["business_chat_id"]
-    clear_pending_for(user_id)
     msg_business = f"📌 客\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}"
     send_message(int(business_chat_id), msg_business)
     staff_buttons = [
@@ -586,7 +585,6 @@ def handle_not_consumed_wait_reason(user_id, chat_id, text, pending):
     name = pending["name"]
     business_chat_id = pending["business_chat_id"]
     reason = text.strip()
-    clear_pending_for(user_id)
     send_message(chat_id, f"掰掰謝謝光臨!!")
     send_message(int(business_chat_id), f"⚠️ 未消: {name} {reason}")
 
