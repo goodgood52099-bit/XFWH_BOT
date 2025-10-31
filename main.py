@@ -749,7 +749,106 @@ def handle_confirm_cancel(chat_id, user_id, hhmm, name, callback_id):
     broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
     send_message(chat_id, f"✅ 已取消 {hhmm} {name} 的預約")
     answer_callback(callback_id)
+# -------------------------------
+# 服務員群按鈕統一回覆函式
+# -------------------------------
+def handle_staff_callback(user_id, chat_id, action, parts, callback_id):
+    # parts 是 callback_data 拆分後的 list
+    def reply(text, buttons=None):
+        send_message(chat_id, text, buttons=buttons)
+        answer_callback(callback_id)
 
+    if action == "staff_up":
+        if len(parts) < 4:
+            return reply("❌ 資料格式錯誤")
+        _, hhmm, name, business_chat_id = parts
+        key = f"{hhmm}|{name}|{business_chat_id}"
+        if key not in first_notify_sent:
+            send_message(int(business_chat_id), f"⬆️ 上 {hhmm} {name}")
+            first_notify_sent[key] = True
+
+        staff_buttons = [[
+            {"text": "輸入客資", "callback_data": f"input_client|{hhmm}|{name}|{business_chat_id}"},
+            {"text": "未消", "callback_data": f"not_consumed|{hhmm}|{name}|{business_chat_id}"}
+        ]]
+        return reply(f"✅ 已通知業務 {name}", buttons=staff_buttons)
+
+    elif action == "input_client":
+        if len(parts) < 4:
+            return reply("❌ 資料格式錯誤")
+        _, hhmm, business_name, business_chat_id = parts
+        pending_data = {
+            "action": "input_client",
+            "hhmm": hhmm,
+            "business_name": business_name,
+            "business_chat_id": business_chat_id
+        }
+        set_pending_for(user_id, pending_data)
+        return reply("✏️ 請輸入客稱、年紀、服務人員與金額（格式：小美 25 Alice 3000）")
+
+    elif action == "not_consumed":
+        if len(parts) < 4:
+            return reply("❌ 資料格式錯誤")
+        _, hhmm, name, business_chat_id = parts
+        pending_data = {
+            "action": "not_consumed_wait_reason",
+            "hhmm": hhmm,
+            "name": name,
+            "business_chat_id": business_chat_id
+        }
+        set_pending_for(user_id, pending_data)
+        return reply("✏️ 請輸入未消原因：")
+
+    elif action == "double":
+        if len(parts) < 4:
+            return reply("❌ 資料格式錯誤")
+        _, hhmm, business_name, business_chat_id = parts
+        first_staff = get_staff_name(user_id)
+        key = f"{hhmm}|{business_name}"
+        # 檢查是否已有人按過第一位
+        if key in double_staffs:
+            return reply(f"⚠️ {hhmm} {business_name} 已有人選擇第一位服務員：{double_staffs[key][0]}")
+        pending_data = {
+            "action": "double_wait_second",
+            "hhmm": hhmm,
+            "business_name": business_name,
+            "business_chat_id": business_chat_id,
+            "first_staff": first_staff
+        }
+        set_pending_for(user_id, pending_data)
+        return reply(f"✏️ 請輸入另一位服務員名字，與 {first_staff} 配合雙人服務")
+
+    elif action == "complete":
+        if len(parts) < 4:
+            return reply("❌ 資料格式錯誤")
+        _, hhmm, business_name, business_chat_id = parts
+        key = f"{hhmm}|{business_name}"
+        staff_list = double_staffs.get(key, [get_staff_name(user_id)])
+        pending_data = {
+            "action": "complete_wait_amount",
+            "hhmm": hhmm,
+            "business_name": business_name,
+            "business_chat_id": business_chat_id,
+            "staff_list": staff_list
+        }
+        set_pending_for(user_id, pending_data)
+        return reply(f"✏️ 請輸入 {hhmm} {business_name} 的總金額（數字）：")
+
+    elif action == "fix":
+        if len(parts) < 4:
+            return reply("❌ 資料格式錯誤")
+        _, hhmm, business_name, business_chat_id = parts
+        pending_data = {
+            "action": "input_client",
+            "hhmm": hhmm,
+            "business_name": business_name,
+            "business_chat_id": business_chat_id
+        }
+        set_pending_for(user_id, pending_data)
+        return reply("✏️ 請重新輸入客資（格式：小美 25 Alice 3000）")
+
+    else:
+        return reply("⚠️ 無效按鈕")
 
 # -------------------------------
 # Telegram callback query 處理
@@ -824,125 +923,12 @@ def handle_callback_query(cq):
         return
 
     # ---------------- staff 流程 ----------------
-     # ---------------- 上班通知 ----------------
-    if data.startswith("staff_up|"):
-        parts = data.split("|", 3)
-        if len(parts) < 4:
-            send_message(chat_id, "❌ 資料格式錯誤")
-            return answer_callback(callback_id)
-        _, hhmm, name, business_chat_id = parts
-        key = f"{hhmm}|{name}|{business_chat_id}"
-        # 只通知第一次
-        if key not in first_notify_sent:
-            send_message(int(business_chat_id), f"⬆️ 上 {hhmm} {name}")
-            first_notify_sent[key] = True
-
-        staff_buttons = [[
-            {"text": "輸入客資", "callback_data": f"input_client|{hhmm}|{name}|{business_chat_id}"},
-            {"text": "未消", "callback_data": f"not_consumed|{hhmm}|{name}|{business_chat_id}"}
-        ]]
-        return reply(f"✅ 已通知業務 {name}", buttons=staff_buttons)
-
-    # ---------------- 輸入客資 ----------------
-    if data.startswith("input_client|"):
-        parts = data.split("|", 3)
-        if len(parts) < 4:
-            send_message(chat_id, "❌ 資料格式錯誤")
-            return answer_callback(callback_id)
-        _, hhmm, name, business_chat_id = parts
-        pending_data = {
-            "action": "input_client",
-            "hhmm": hhmm,
-            "business_name": name,
-            "business_chat_id": business_chat_id
-        }
-        set_pending_for(user_id, pending_data)
-        print("DEBUG pending set (input_client):", pending_data)
-        send_message(chat_id, "✏️ 請輸入客稱、年紀、服務人員與金額（格式：小帥 25 小美 3000）")
-        answer_callback(callback_id)
-        return
-
-    # ---------------- 未消 ----------------
-    if data.startswith("not_consumed|"):
-        parts = data.split("|", 3)
-        if len(parts) < 4:
-            send_message(chat_id, "❌ 資料格式錯誤")
-            return answer_callback(callback_id)
-        _, hhmm, name, business_chat_id = parts
-        pending_data = {
-            "action": "not_consumed_wait_reason",
-            "hhmm": hhmm,
-            "name": name,
-            "business_chat_id": business_chat_id
-        }
-        set_pending_for(user_id, pending_data)
-        print("DEBUG pending set (not_consumed):", pending_data)
-        send_message(chat_id, "✏️ 請輸入未消原因：")
-        answer_callback(callback_id)
-        return
-
-    # ---------------- 雙人服務 ----------------
-    if data.startswith("double|"):
-        parts = data.split("|", 3)
-        if len(parts) < 4:
-            send_message(chat_id, "❌ 資料格式錯誤")
-            return answer_callback(callback_id)
-        _, hhmm, business_name, business_chat_id = parts
-        first_staff = get_staff_name(user_id)
-        key = f"{hhmm}|{business_name}"
-        pending_data = {
-            "action": "double_wait_second",
-            "hhmm": hhmm,
-            "business_name": business_name,
-            "business_chat_id": business_chat_id,
-            "first_staff": first_staff
-        }
-        set_pending_for(user_id, pending_data)
-        print("DEBUG pending set (double_wait_second):", pending_data)
-        send_message(chat_id, f"✏️ 請輸入另一位服務員名字，與 {first_staff} 配合雙人服務")
-        answer_callback(callback_id)
-        return
-
-    # ---------------- 完成服務 ----------------
-    if data.startswith("complete|"):
-        parts = data.split("|", 3)
-        if len(parts) < 4:
-            send_message(chat_id, "❌ 資料格式錯誤")
-            return answer_callback(callback_id)
-        _, hhmm, business_name, business_chat_id = parts
-        key = f"{hhmm}|{business_name}"
-        staff_list = double_staffs.get(key, [get_staff_name(user_id)])
-        pending_data = {
-            "action": "complete_wait_amount",
-            "hhmm": hhmm,
-            "business_name": business_name,
-            "business_chat_id": business_chat_id,
-            "staff_list": staff_list
-        }
-        set_pending_for(user_id, pending_data)
-        print("DEBUG pending set (complete_wait_amount):", pending_data)
-        send_message(chat_id, f"✏️ 請輸入 {hhmm} {business_name} 的總金額（數字）：")
-        answer_callback(callback_id)
-        return
-
-    # ---------------- 修正 ----------------
-    if data.startswith("fix|"):
-        parts = data.split("|", 3)
-        if len(parts) < 4:
-            send_message(chat_id, "❌ 資料格式錯誤")
-            return answer_callback(callback_id)
-        _, hhmm, business_name, business_chat_id = parts
-        pending_data = {
-            "action": "input_client",
-            "hhmm": hhmm,
-            "business_name": business_name,
-            "business_chat_id": business_chat_id
-        }
-        set_pending_for(user_id, pending_data)
-        print("DEBUG pending set (fix->input_client):", pending_data)
-        send_message(chat_id, "✏️ 請重新輸入客資（格式：小美 25 Alice 3000）")
-        answer_callback(callback_id)
-        return
+    staff_actions = ["staff_up", "input_client", "not_consumed", "double", "complete", "fix"]
+    for act in staff_actions:
+        if data.startswith(act + "|"):
+            parts = data.split("|")
+            handle_staff_callback(user_id, chat_id, act, parts, callback_id)
+            return
     # ---------------- 取消 流程 ----------------   
     if data == "cancel_flow":
         clear_pending_for(user_id)
@@ -951,7 +937,6 @@ def handle_callback_query(cq):
         return
     # ---------------- noop 按鈕（無效） ----------------
     answer_callback(callback_id, text="⚠️ 此按鈕暫時無效")
-
 
 # -------------------------------
 # 自動整點公告
