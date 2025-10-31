@@ -853,7 +853,15 @@ def handle_staff_callback(user_id, chat_id, action, parts, callback_id):
         return reply("⚠️ 無效按鈕")
 
 # -------------------------------
-# Telegram callback query 處理
+# 統一回覆函式
+# -------------------------------
+def safe_reply(chat_id, text, buttons=None, callback_id=None):
+    send_message(chat_id, text, buttons=buttons)
+    if callback_id:
+        answer_callback(callback_id)
+
+# -------------------------------
+# Callback Query 處理
 # -------------------------------
 def handle_callback_query(cq):
     callback_id = cq["id"]
@@ -863,6 +871,15 @@ def handle_callback_query(cq):
 
     print(f"DEBUG callback_query: {data} from {user_id} in {chat_id}")
 
+    # 取消流程統一
+    if data == "cancel_flow":
+        clear_pending_for(user_id)
+        safe_reply(chat_id, "❌ 已取消操作。", callback_id=callback_id)
+        return
+
+    # pending 檢查
+    pending = get_pending_for(user_id)
+
     # ---------------- 主按鈕（預約 / 客到 / 修改 / 取消） ----------------
     if data.startswith("main|"):
         action = data.split("|")[1]
@@ -871,6 +888,8 @@ def handle_callback_query(cq):
 
     # ---------------- 預約選擇時段 ----------------
     if data.startswith("reserve_pick|"):
+        if pending:
+            return safe_reply(chat_id, "⚠️ 你目前有未完成操作，請先完成或取消。", callback_id)
         hhmm = data.split("|")[1]
         set_pending_for(user_id, {
             "action": "reserve_wait_name",
@@ -878,12 +897,13 @@ def handle_callback_query(cq):
             "group_chat": chat_id,
             "created_at": time.time()
         })
-        send_message(chat_id, f"✏️ 請輸入要預約 {hhmm} 的姓名：")
-        answer_callback(callback_id)
+        safe_reply(chat_id, f"✏️ 請輸入要預約 {hhmm} 的姓名：", callback_id=callback_id)
         return
 
     # ---------------- 客到選擇 ----------------
     if data.startswith("arrive_select|"):
+        if pending:
+            return safe_reply(chat_id, "⚠️ 你目前有未完成操作，請先完成或取消。", callback_id)
         _, hhmm, name = data.split("|")
         set_pending_for(user_id, {
             "action": "arrive_wait_amount",
@@ -892,19 +912,22 @@ def handle_callback_query(cq):
             "group_chat": chat_id,
             "created_at": time.time()
         })
-        send_message(chat_id, f"✏️ 請輸入 {hhmm} {name} 的金額：")
-        answer_callback(callback_id)
+        safe_reply(chat_id, f"✏️ 請輸入 {hhmm} {name} 的金額：", callback_id=callback_id)
         return
 
     # ---------------- 修改預約選擇 ----------------
     if data.startswith("modify_pick|"):
+        if pending:
+            return safe_reply(chat_id, "⚠️ 你目前有未完成操作，請先完成或取消。", callback_id)
         _, old_hhmm, old_name = data.split("|")
         handle_modify_pick(user_id, chat_id, old_hhmm, old_name)
-        answer_callback(callback_id)
+        safe_reply(chat_id, "請選擇修改目標時段", callback_id=callback_id)
         return
 
-    # 修改目標時段
+    # ---------------- 修改目標時段 ----------------
     if data.startswith("modify_to|"):
+        if pending:
+            return safe_reply(chat_id, "⚠️ 你目前有未完成操作，請先完成或取消。", callback_id)
         _, old_hhmm, old_name, new_hhmm = data.split("|")
         set_pending_for(user_id, {
             "action": "modify_wait_name",
@@ -914,8 +937,7 @@ def handle_callback_query(cq):
             "group_chat": chat_id,
             "created_at": time.time()
         })
-        send_message(chat_id, f"✏️ 請輸入新的名稱來修改 {old_hhmm} {old_name} → {new_hhmm}")
-        answer_callback(callback_id)
+        safe_reply(chat_id, f"✏️ 請輸入新的名稱來修改 {old_hhmm} {old_name} → {new_hhmm}", callback_id=callback_id)
         return
 
     # ---------------- 取消預約 ----------------
@@ -929,16 +951,18 @@ def handle_callback_query(cq):
     for act in staff_actions:
         if data.startswith(act + "|"):
             parts = data.split("|")
+            # double_staff race condition 保護
+            if act == "double" and len(parts) >= 4:
+                _, hhmm, business_name, business_chat_id = parts
+                key = f"{hhmm}|{business_name}"
+                if key in double_staffs:
+                    return safe_reply(chat_id, f"⚠️ {hhmm} {business_name} 已有人選擇第一位服務員：{double_staffs[key][0]}", callback_id)
             handle_staff_callback(user_id, chat_id, act, parts, callback_id)
             return
-    # ---------------- 取消 流程 ----------------   
-    if data == "cancel_flow":
-        clear_pending_for(user_id)
-        send_message(chat_id, "❌ 已取消操作。")
-        answer_callback(callback_id)
-        return
+
     # ---------------- noop 按鈕（無效） ----------------
-    answer_callback(callback_id, text="⚠️ 此按鈕暫時無效")
+    safe_reply(chat_id, "⚠️ 此按鈕暫時無效", callback_id=callback_id)
+
 
 # -------------------------------
 # 自動整點公告
