@@ -330,10 +330,17 @@ def handle_text_message(msg):
         return
 
     if text == "/list":
-        print("✅ DEBUG: /list 被觸發")
-        # 先送一個簡單訊息測試
-        res = send_message(chat_id, "✅ /list 測試成功！")
-        print("DEBUG send_message response:", res)
+        print("✅ DEBUG: /list 被觸發")  # webhook 收到
+
+        try:
+            print("✅ DEBUG: 準備發送測試訊息到群組", chat_id)
+            res = send_message(chat_id, "✅ /list 測試成功！這是從伺服器發出的訊息。")
+            print("✅ DEBUG send_message response:", res)
+        except Exception as e:
+            import traceback
+            print("❌ DEBUG: /list 執行錯誤:", e)
+            print(traceback.format_exc())
+
         return
 
     if user_id in ADMIN_IDS:
