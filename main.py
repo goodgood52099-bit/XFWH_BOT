@@ -852,15 +852,17 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 def webhook():
     try:
         update = request.json
-        print("DEBUG webhook 收到:", update)  # <- 新增 debug
+        print("DEBUG webhook 收到:", update)
+
         if "message" in update:
-            handle_text_message_debug(update["message"])  # <- 改成 debug 版本
+            handle_text_message(update["message"])  # 用正式版
         elif "callback_query" in update:
             cq = update["callback_query"]
             handle_callback_query(cq)
     except Exception:
         traceback.print_exc()
     return "OK"
+
 
 # -------------------------------
 # 啟動 Flask
