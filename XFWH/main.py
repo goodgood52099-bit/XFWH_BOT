@@ -9,23 +9,24 @@ from modules.shifts import generate_latest_shift_list
 from modules.background import auto_announce, ask_arrivals_thread
 from modules.pending_action import handle_pending_action
 import threading
+import os
 
 app = Flask(__name__)
 
 # -------------------------------
-# 測試頁面（GET）
+# 測試首頁（瀏覽器可訪問）
 # -------------------------------
 @app.route("/", methods=["GET"])
 def index():
     return "✅ Bot is running!"
 
 # -------------------------------
-# Webhook 入口（POST）
+# Webhook 入口
 # -------------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
-    print("DEBUG webhook 收到更新:", data)  # DEBUG
+    print("DEBUG webhook payload:", data)  # 增加 DEBUG
     if "message" in data:
         handle_text_message(data["message"])
     return "OK"
@@ -42,19 +43,16 @@ def handle_text_message(msg):
     user_id = user.get("id")
     user_name = user.get("first_name", "")
 
-    print(f"DEBUG 收到訊息: {text} 來自 {user_id} in {chat_id}")  # DEBUG
+    print(f"DEBUG message from {user_id} in {chat_id}: {text}")  # DEBUG
 
-    # 清理過期 pending
     cleanup_expired_pending()
-    add_group(chat_id, chat_type)
+    add_group(chat_id, chat_type)      
 
-    # pending 優先處理
     pending = get_pending_for(user_id)
     if pending:
         handle_pending_action(user_id, chat_id, text, pending)
         return
 
-    # /help 指令
     if text == "/help":
         help_text = """📌 Telegram 預約機器人指令說明 📌
 一般使用者：按 /list 查看時段
@@ -62,7 +60,6 @@ def handle_text_message(msg):
         send_message(chat_id, help_text)
         return    
 
-    # 設定服務員群組
     if text.startswith("/STAFF"):
         if user_id not in ADMIN_IDS:
             send_message(chat_id, "⚠️ 你沒有權限設定服務員群組")
@@ -71,9 +68,8 @@ def handle_text_message(msg):
         send_message(chat_id, "✅ 已將本群組設定為服務員群組")
         return
 
-    # /list 指令
     if text == "/list":
-        shift_text = generate_latest_shift_list()
+        shift_text = generate_latest_shift_list() 
         buttons = [
             [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
             [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
@@ -81,7 +77,6 @@ def handle_text_message(msg):
         send_message(chat_id, shift_text, buttons=buttons)
         return
 
-    # 管理員文字處理
     if user_id in ADMIN_IDS:
         handle_admin_text(chat_id, text, ADMIN_IDS)
         return
@@ -98,4 +93,6 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # 啟動 Flask
 # -------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    port = int(os.getenv("PORT", 8080))
+    print(f"DEBUG starting Flask on 0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port)
