@@ -500,7 +500,7 @@ def handle_reserve_wait_name(user_id, chat_id, text, pending):
         [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
     ]
     broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
-
+    clear_pending_for(user_id)
 
 def handle_arrive_wait_amount(user_id, chat_id, text, pending):
     hhmm = pending["hhmm"]
@@ -528,7 +528,7 @@ def handle_arrive_wait_amount(user_id, chat_id, text, pending):
         broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
     else:
         send_message(group_chat, f"⚠️ 找不到預約 {name} 或已被移除")
-
+    clear_pending_for(user_id)
 
 def handle_input_client(user_id, chat_id, text, pending):
     try:
@@ -549,7 +549,7 @@ def handle_input_client(user_id, chat_id, text, pending):
         ]
     ]
     send_message(chat_id, msg_business, buttons=staff_buttons)
-
+    clear_pending_for(user_id)
 
 def handle_double_wait_second(user_id, chat_id, text, pending):
     hhmm = pending["hhmm"]
@@ -561,7 +561,7 @@ def handle_double_wait_second(user_id, chat_id, text, pending):
     double_staffs[key] = [first_staff, second_staff]
     staff_list = "、".join(double_staffs[key])  # ✅ 這裡用 key
     send_message(int(business_chat_id), f"👥 雙人服務更新：{staff_list}")
-
+    clear_pending_for(user_id)
 
 
 def handle_complete_wait_amount(user_id, chat_id, text, pending):
@@ -578,7 +578,7 @@ def handle_complete_wait_amount(user_id, chat_id, text, pending):
     msg = f"✅ 完成服務通知\n{hhmm} {business_name}\n服務人員: {staff_str}\n金額: {amount}"
     send_message(chat_id, msg)
     send_message(int(business_chat_id), msg)
-
+    clear_pending_for(user_id)
 
 def handle_not_consumed_wait_reason(user_id, chat_id, text, pending):
     hhmm = pending["hhmm"]
@@ -587,7 +587,7 @@ def handle_not_consumed_wait_reason(user_id, chat_id, text, pending):
     reason = text.strip()
     send_message(chat_id, f"掰掰謝謝光臨!!")
     send_message(int(business_chat_id), f"⚠️ 未消: {name} {reason}")
-
+    clear_pending_for(user_id)
 
 def handle_modify_wait_name(user_id, chat_id, text, pending):
     old_hhmm = pending.get("old_hhmm")
@@ -623,7 +623,7 @@ def handle_modify_wait_name(user_id, chat_id, text, pending):
     ]
     broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
     send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
-
+    clear_pending_for(user_id)
 
 # -------------------------------
 # 主按鈕處理
