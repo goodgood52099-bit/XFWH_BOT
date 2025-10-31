@@ -256,31 +256,6 @@ def build_bookings_buttons(bookings, chat_id, prefix):
     btns_rows = chunk_list(btns, 2)
     btns_rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
     return btns_rows
-# -------------------------------
-# DEBUG
-# -------------------------------    
-def handle_text_message_debug(msg):
-    text = msg.get("text", "").strip() if msg.get("text") else ""
-    chat = msg.get("chat", {})
-    chat_id = chat.get("id")
-    chat_type = chat.get("type")
-    user = msg.get("from", {})
-    user_id = user.get("id")
-    user_name = user.get("first_name", "")
-
-    print(f"DEBUG handle_text_message: {user_name}({user_id}) 在 {chat_id} 發訊息: {text}")
-
-    # 測試 /list
-    if text.lower().startswith("/list"):
-        send_message(chat_id, "✅ DEBUG: /list 被觸發")
-        return
-
-    # 測試 /STAFF
-    if text.lower().startswith("/staff"):
-        send_message(chat_id, f"✅ DEBUG: /STAFF 被觸發 (原本 user_id={user_id})")
-        return
-
-    send_message(chat_id, f"💡 DEBUG: 收到訊息: {text}")
 
 # -------------------------------
 # 文字訊息處理入口
@@ -631,22 +606,42 @@ def handle_main(user_id, chat_id, action, callback_id):
         send_message(chat_id, text, buttons=buttons)
         answer_callback(callback_id)
 
-    # 根據 action 路由
+    # 預約時段
     if action == "reserve":
-        shifts = [s for s in datafile.get("shifts", []) if is_future_time(s.get("time", ""))]
+        now = datetime.now(TZ)
+        shifts = []
+        for s in datafile.get("shifts", []):
+            hhmm = s.get("time")
+            if not hhmm:
+                continue
+            # 計算是否未來時段
+            hh, mm = map(int, hhmm.split(":"))
+            shift_dt = datetime.combine(now.date(), dt_time(hh, mm)).replace(tzinfo=TZ)
+            if shift_dt <= now:
+                continue
+            shifts.append(s)
+
+        if not shifts:
+            return reply("📅 目前沒有可預約的時段。")
+
         rows = []
         row = []
         for s in shifts:
             used = len(s.get("bookings", [])) + len([x for x in s.get("in_progress", []) if not str(x).endswith("(候補)")])
             limit = s.get("limit", 1)
             if used < limit:
-                row.append({"text": f"{s['time']} ({limit-used})", "callback_data": f"reserve_pick|{s['time']}"})
+                btn = {"text": f"{s['time']} ({limit - used})", "callback_data": f"reserve_pick|{s['time']}"}
             else:
-                row.append({"text": f"{s['time']} (滿)", "callback_data": "noop"})
+                btn = {"text": f"{s['time']} (滿)", "callback_data": "noop"}
+            row.append(btn)
             if len(row) == 3:
-                rows.append(row); row = []
-        if row: rows.append(row)
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        # 加上取消按鈕
         rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
+
         return reply("請選擇要預約的時段：", buttons=rows)
 
     if action == "arrive":
