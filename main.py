@@ -331,11 +331,13 @@ def handle_text_message(msg):
 
     if text == "/list":
         shift_text = generate_latest_shift_list()
+        print("DEBUG shift_text:", shift_text)  # <-- 新增這行
         buttons = [
             [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
             [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
         ]
         send_message(chat_id, shift_text, buttons=buttons)
+        print("DEBUG send_message response:", res)  # <-- 新增這行
         return
 
     if user_id in ADMIN_IDS:
