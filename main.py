@@ -293,6 +293,8 @@ def handle_text_message(msg):
     user = msg.get("from", {})
     user_id = user.get("id")
     user_name = user.get("first_name", "")
+    print(f"DEBUG handle_text_message: {user_name}({user_id}) 在 {chat_id} 發訊息: {text}")
+    print(f"DEBUG raw text repr: {repr(text)}")  # ← 新增這行
 
     # ----------------- 自動清理過期 pending（3 分鐘） -----------------
     try:
