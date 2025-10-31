@@ -288,26 +288,7 @@ def handle_text_message(msg):
 
     pending_dict = load_pending()    
     print("DEBUG: pending_dict =", pending_dict)    
-    # ----------------- 自動清理過期 pending（3 分鐘） -----------------
-    try:
-        pending_data = load_json_file("data/pending.json")
-        now = time.time()
-        expired = [uid for uid, p in pending_data.items() if now - p.get("created_at", 0) > 180]
-        for uid in expired:
-            del pending_data[uid]
-        if expired:
-            save_json_file("data/pending.json", pending_data)
-            print(f"🧹 清除過期 pending: {expired}")
-    except Exception as e:
-        print("❌ pending 自動清理錯誤:", e)
-        
-    pending = get_pending_for(user_id)
-    print("DEBUG: pending =", pending)
-    if pending:
-        handle_pending_action(user_id, chat_id, text, pending)
-        return
-    else:
-        print("DEBUG: 沒有 pending，直接忽略或其他處理")
+   
     # ----------------- 新群組自動記錄 -----------------
     add_group(chat_id, chat_type)
 
