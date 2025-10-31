@@ -817,6 +817,18 @@ def handle_callback_query(cq):
         handle_staff_flow(user_id, chat_id, data, callback_id)
         return
 
+    if data.startswith("reserve_pick|"):
+        hhmm = data.split("|")[1]
+        # 設定 pending 等使用者輸入姓名
+        set_pending_for(user_id, {
+            "action": "reserve_wait_name",
+            "hhmm": hhmm,
+            "group_chat": chat_id,
+            "created_at": time.time()  # 可用於自動清理過期 pending
+        })
+        send_message(chat_id, f"✏️ 請輸入要預約 {hhmm} 的姓名：")
+        answer_callback(callback_id)
+        return
     # noop 按鈕（無效）
     answer_callback(callback_id, text="⚠️ 此按鈕暫時無效")
 
