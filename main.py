@@ -354,7 +354,7 @@ def handle_text_message(msg):
 
                 send_message(group_chat, f"✅ {hhmm} {name} 已標記到場，金額：{amount}")
                 # ➡️ 新增：通知所有服務員群組
-                staff_message = f"📌 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
+                staff_message = f"🙋‍♀️ 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
                 staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
                 broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
 
@@ -627,7 +627,7 @@ def handle_text_message(msg):
 def webhook():
     try:
         update = request.get_json()
-        
+
         # 普通訊息
         if "message" in update:
             handle_text_message(update["message"])
@@ -645,32 +645,38 @@ def webhook():
             chat = message.get("chat", {}) or {}
             chat_id = chat.get("id")
 
-            # 回覆按鈕簡化
+            # ✅ 回覆 callback_query 避免 Telegram 重送
+            answer_callback(callback_id)
+
+            # ✅ reply 簡化（不重複回覆 callback）
             def reply(text, buttons=None):
                 send_message(chat_id, text, buttons=buttons)
-                answer_callback(callback_id)
 
             # 取消流程或無操作
             if data in ("cancel_flow", "noop"):
                 clear_pending_for(user_id)
-                return reply("已取消")
+                reply("已取消")
+                return {"ok": True}
 
             # 分派主流程
             if data and data.startswith("main|"):
                 _, action = data.split("|", 1)
-                return handle_main(user_id, chat_id, action, callback_id)
+                handle_main(user_id, chat_id, action)
+                return {"ok": True}
 
             # 預約選擇時段
             if data and data.startswith("reserve_pick|"):
                 _, hhmm = data.split("|", 1)
                 set_pending_for(user_id, {"action": "reserve_wait_name", "hhmm": hhmm, "group_chat": chat_id})
-                return reply(f"✏️ 請在此群輸入欲預約的/姓名（針對 {hhmm}）。\n輸入後即完成預約。")
+                reply(f"✏️ 請在此群輸入欲預約的姓名（針對 {hhmm}）。\n輸入後即完成預約。")
+                return {"ok": True}
 
             # 客到選擇
             if data and data.startswith("arrive_select|"):
                 parts = data.split("|", 2)
                 if len(parts) < 3:
-                    return answer_callback(callback_id, "資料錯誤")
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
                 _, hhmm, name = parts
                 set_pending_for(user_id, {
                     "action": "arrive_wait_amount",
@@ -678,21 +684,25 @@ def webhook():
                     "name": name,
                     "group_chat": chat_id
                 })
-                return reply(f"✏️ 請輸入 {hhmm} {name} 的金額（數字）：")
+                reply(f"✏️ 請輸入 {hhmm} {name} 的金額（數字）：")
+                return {"ok": True}
 
             # 修改預約
             if data and data.startswith("modify_pick|"):
                 parts = data.split("|", 2)
                 if len(parts) < 3:
-                    return answer_callback(callback_id, "資料錯誤")
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
                 _, old_hhmm, old_name = parts
-                return handle_modify_pick(user_id, chat_id, old_hhmm, old_name)
+                handle_modify_pick(user_id, chat_id, old_hhmm, old_name)
+                return {"ok": True}
 
             # 修改到新時段
             if data and data.startswith("modify_to|"):
                 parts = data.split("|", 3)
                 if len(parts) < 4:
-                    return answer_callback(callback_id, "資料錯誤")
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
                 _, old_hhmm, old_name, new_hhmm = parts
                 set_pending_for(user_id, {
                     "action": "modify_wait_name",
@@ -701,34 +711,41 @@ def webhook():
                     "new_hhmm": new_hhmm,
                     "group_chat": chat_id
                 })
-                return reply(f"請輸入新的姓名（或輸入原姓名 `{old_name}` 保留）以完成從 {old_hhmm} → {new_hhmm} 的修改：")
+                reply(f"請輸入新的姓名（或輸入原姓名 `{old_name}` 保留）以完成從 {old_hhmm} → {new_hhmm} 的修改：")
+                return {"ok": True}
 
             # 取消預約
             if data and data.startswith("cancel_pick|"):
                 parts = data.split("|", 2)
                 if len(parts) < 3:
-                    return answer_callback(callback_id, "資料錯誤")
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
                 _, hhmm, name = parts
                 buttons = [[
                     {"text": "確認取消", "callback_data": f"confirm_cancel|{hhmm}|{name}"},
                     {"text": "取消", "callback_data": "cancel_flow"}
                 ]]
-                return reply(f"確定要取消 {hhmm} {name} 的預約嗎？", buttons=buttons)
+                reply(f"確定要取消 {hhmm} {name} 的預約嗎？", buttons=buttons)
+                return {"ok": True}
 
             # 確認取消
             if data and data.startswith("confirm_cancel|"):
                 parts = data.split("|", 2)
                 if len(parts) < 3:
-                    return answer_callback(callback_id, "資料錯誤")
+                    answer_callback(callback_id, "資料錯誤")
+                    return {"ok": True}
                 _, hhmm, name = parts
-                return handle_confirm_cancel(chat_id, user_id, hhmm, name, callback_id)
+                handle_confirm_cancel(chat_id, user_id, hhmm, name)
+                return {"ok": True}
 
             # 上班 / 輸入客資 / 未消 / 雙人服務 / 完成 / 修正
             if data and data.startswith(("staff_up|", "input_client|", "not_consumed|", "double|", "complete|", "fix|")):
-                return handle_staff_flow(user_id, chat_id, data, callback_id)
+                handle_staff_flow(user_id, chat_id, data)
+                return {"ok": True}
 
             # 沒有匹配的 callback
-            return answer_callback(callback_id, "操作已接收。")
+            answer_callback(callback_id, "操作已接收。")
+            return {"ok": True}
 
     except Exception:
         traceback.print_exc()
