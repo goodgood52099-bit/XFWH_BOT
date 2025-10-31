@@ -792,6 +792,7 @@ def handle_staff_flow(user_id, chat_id, data, callback_id):
             "hhmm": hhmm,
             "business_name": name,
             "business_chat_id": business_chat_id
+            "created_at": time.time()
         }
         set_pending_for(user_id, pending_data)
         print("DEBUG pending set (input_client):", pending_data)
