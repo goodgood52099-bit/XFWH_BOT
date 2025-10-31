@@ -30,7 +30,7 @@ ADMIN_IDS = [7236880214, 7807558825, 7502175264]  # 管理員 Telegram ID，自�
 TZ = ZoneInfo("Asia/Taipei")  # 台灣時區
 
 double_staffs = {}  # 用於紀錄雙人服務
-
+first_notify_sent = {}  # key = f"{hhmm}|{name}|business_chat_id"
 asked_shifts = set()
 
 # -------------------------------
@@ -708,7 +708,12 @@ def handle_staff_flow(user_id, chat_id, data, callback_id):
 
     if data.startswith("staff_up|"):
         _, hhmm, name, business_chat_id = data.split("|", 3)
-        send_message(int(business_chat_id), f"⬆️ 上 {hhmm} {name}")
+        key = f"{hhmm}|{name}|{business_chat_id}"
+        # 只通知第一次
+        if key not in first_notify_sent:
+            send_message(int(business_chat_id), f"⬆️ 上 {hhmm} {name}")
+            first_notify_sent[key] = True
+
         staff_buttons = [[
             {"text": "輸入客資", "callback_data": f"input_client|{hhmm}|{name}|{business_chat_id}"},
             {"text": "未消", "callback_data": f"not_consumed|{hhmm}|{name}|{business_chat_id}"}
@@ -743,7 +748,6 @@ def handle_staff_flow(user_id, chat_id, data, callback_id):
         _, hhmm, business_name, business_chat_id = data.split("|", 3)
         set_pending_for(user_id, {"action": "input_client","hhmm": hhmm,"business_name": business_name,"business_chat_id": business_chat_id})
         return reply("✏️ 請重新輸入客資（格式：小美 25 Alice 3000）")
-
 
 # -------------------------------
 # 自動整點公告
