@@ -774,6 +774,56 @@ def handle_staff_flow(user_id, chat_id, data, callback_id):
         _, hhmm, business_name, business_chat_id = data.split("|", 3)
         set_pending_for(user_id, {"action": "input_client","hhmm": hhmm,"business_name": business_name,"business_chat_id": business_chat_id})
         return reply("✏️ 請重新輸入客資（格式：小美 25 Alice 3000）")
+# -------------------------------
+# Telegram callback query 處理
+# -------------------------------
+def handle_callback_query(cq):
+    callback_id = cq["id"]
+    data = cq["data"]
+    user_id = cq["from"]["id"]
+    chat_id = cq["message"]["chat"]["id"]
+
+    print(f"DEBUG callback_query: {data} from {user_id} in {chat_id}")
+
+    # 主按鈕（預約 / 客到 / 修改 / 取消）
+    if data.startswith("main|"):
+        action = data.split("|")[1]
+        handle_main(user_id, chat_id, action, callback_id)
+        return
+
+    # 修改預約選擇
+    if data.startswith("modify_pick|"):
+        _, old_hhmm, old_name = data.split("|")
+        handle_modify_pick(user_id, chat_id, old_hhmm, old_name)
+        answer_callback(callback_id)
+        return
+
+    # 修改目標時段
+    if data.startswith("modify_to|"):
+        _, old_hhmm, old_name, new_hhmm = data.split("|")
+        set_pending_for(user_id, {"action": "modify_wait_name",
+                                  "old_hhmm": old_hhmm,
+                                  "old_name": old_name,
+                                  "new_hhmm": new_hhmm,
+                                  "group_chat": chat_id})
+        send_message(chat_id, f"✏️ 請輸入新的名稱來修改 {old_hhmm} {old_name} → {new_hhmm}")
+        answer_callback(callback_id)
+        return
+
+    # 取消預約
+    if data.startswith("cancel_pick|"):
+        _, hhmm, name = data.split("|")
+        handle_confirm_cancel(chat_id, user_id, hhmm, name, callback_id)
+        return
+
+    # Staff 按鈕
+    staff_prefixes = ["staff_up|","input_client|","not_consumed|","double|","complete|","fix|"]
+    if any(data.startswith(p) for p in staff_prefixes):
+        handle_staff_flow(user_id, chat_id, data, callback_id)
+        return
+
+    # noop 按鈕（無效）
+    answer_callback(callback_id, text="⚠️ 此按鈕暫時無效")
 
 # -------------------------------
 # 自動整點公告
