@@ -68,8 +68,9 @@ def set_pending_for(user_id, payload):
     save_pending(p)
 
 def get_pending_for(user_id):
-    p = load_pending()
-    return p.get(str(user_id))
+    pending_data = load_json_file("data/pending.json")
+    # Telegram user_id 是 int，json key 可能是 str
+    return pending_data.get(str(user_id))  # 用 str 取
 
 def clear_pending_for(user_id):
     p = load_pending()
@@ -286,8 +287,8 @@ def handle_text_message(msg):
     user_id = user.get("id")
     user_name = user.get("first_name", "")
 
-    pending_dict = load_pending()    
-    print("DEBUG: pending_dict =", pending_dict)
+    pending = get_pending_for(user_id)
+    print(f"DEBUG: user_id={user_id}, pending={pending}, text='{text}'")
     # ----------------- 自動清理過期 pending（3 分鐘） -----------------
     try:
         pending_data = load_json_file("data/pending.json")
@@ -469,9 +470,9 @@ def handle_pending_action(user_id, chat_id, text, pending):
     except Exception:
         traceback.print_exc()
         send_message(chat_id, f"❌ 執行動作 {action} 時發生錯誤")
-    finally:
+        success = False
+    if success:
         clear_pending_for(user_id)
-
 
 # -------------------------------
 # 各 pending action 函式
@@ -500,7 +501,7 @@ def handle_reserve_wait_name(user_id, chat_id, text, pending):
         [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
     ]
     broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
-    clear_pending_for(user_id)
+    
 
 def handle_arrive_wait_amount(user_id, chat_id, text, pending):
     hhmm = pending["hhmm"]
@@ -528,14 +529,14 @@ def handle_arrive_wait_amount(user_id, chat_id, text, pending):
         broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
     else:
         send_message(group_chat, f"⚠️ 找不到預約 {name} 或已被移除")
-    clear_pending_for(user_id)
+    
 
 def handle_input_client(user_id, chat_id, text, pending):
     try:
         client_name, age, staff_name, amount = text.split()
     except ValueError:
         send_message(chat_id, "❌ 格式錯誤，請輸入：小美 25 Alice 3000")
-        return
+        return False
     hhmm = pending["hhmm"]
     business_name = pending["business_name"]
     business_chat_id = pending["business_chat_id"]
@@ -549,7 +550,7 @@ def handle_input_client(user_id, chat_id, text, pending):
         ]
     ]
     send_message(chat_id, msg_business, buttons=staff_buttons)
-    clear_pending_for(user_id)
+    return True
 
 def handle_double_wait_second(user_id, chat_id, text, pending):
     hhmm = pending["hhmm"]
@@ -561,7 +562,7 @@ def handle_double_wait_second(user_id, chat_id, text, pending):
     double_staffs[key] = [first_staff, second_staff]
     staff_list = "、".join(double_staffs[key])  # ✅ 這裡用 key
     send_message(int(business_chat_id), f"👥 雙人服務更新：{staff_list}")
-    clear_pending_for(user_id)
+    
 
 
 def handle_complete_wait_amount(user_id, chat_id, text, pending):
@@ -578,7 +579,7 @@ def handle_complete_wait_amount(user_id, chat_id, text, pending):
     msg = f"✅ 完成服務通知\n{hhmm} {business_name}\n服務人員: {staff_str}\n金額: {amount}"
     send_message(chat_id, msg)
     send_message(int(business_chat_id), msg)
-    clear_pending_for(user_id)
+    
 
 def handle_not_consumed_wait_reason(user_id, chat_id, text, pending):
     hhmm = pending["hhmm"]
@@ -587,7 +588,7 @@ def handle_not_consumed_wait_reason(user_id, chat_id, text, pending):
     reason = text.strip()
     send_message(chat_id, f"掰掰謝謝光臨!!")
     send_message(int(business_chat_id), f"⚠️ 未消: {name} {reason}")
-    clear_pending_for(user_id)
+    
 
 def handle_modify_wait_name(user_id, chat_id, text, pending):
     old_hhmm = pending.get("old_hhmm")
@@ -623,7 +624,7 @@ def handle_modify_wait_name(user_id, chat_id, text, pending):
     ]
     broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
     send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
-    clear_pending_for(user_id)
+    
 
 # -------------------------------
 # 主按鈕處理
@@ -657,7 +658,7 @@ def handle_main(user_id, chat_id, action, callback_id):
         rows = []
         row = []
         for s in shifts:
-            used = len(s.get("bookings", [])) + len([x for x in s.get("in_progress", []) if not str(x).endswith("(候補)")])
+            used = len(s.get("bookings", [])) + len([x for x in s.get("in_main.pyprogress", []) if not str(x).endswith("(候補)")])
             limit = s.get("limit", 1)
             if used < limit:
                 btn = {"text": f"{s['time']} ({limit - used})", "callback_data": f"reserve_pick|{s['time']}"}
