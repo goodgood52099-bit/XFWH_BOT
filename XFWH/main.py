@@ -1,38 +1,37 @@
 from flask import Flask, request
-import threading
-import time
-import traceback
-from config import BOT_TOKEN, ADMIN_IDS, TZ
+from config import ADMIN_IDS
 from modules.utils import build_shifts_buttons, build_bookings_buttons
 from modules.admin import handle_admin_text
 from modules.pending import get_pending_for, cleanup_expired_pending
 from modules.groups import add_group
 from modules.telegram_api import send_message
 from modules.shifts import generate_latest_shift_list
-from modules.background import auto_announce, ask_arrivals_thread  # 背景線程
+from modules.background import auto_announce, ask_arrivals_thread
 from modules.pending_action import handle_pending_action
+import threading
 
 app = Flask(__name__)
 
 # -------------------------------
-# Webhook 入口
+# 測試頁面（GET）
+# -------------------------------
+@app.route("/", methods=["GET"])
+def index():
+    return "✅ Bot is running!"
+
+# -------------------------------
+# Webhook 入口（POST）
 # -------------------------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    try:
-        data = request.json
-        print("DEBUG webhook 收到更新:", data)
-
-        if "message" in data:
-            handle_text_message(data["message"])
-        else:
-            print("DEBUG: 非訊息更新，忽略")
-    except Exception:
-        traceback.print_exc()
+    data = request.json
+    print("DEBUG webhook 收到更新:", data)  # DEBUG
+    if "message" in data:
+        handle_text_message(data["message"])
     return "OK"
 
 # -------------------------------
-# 處理文字訊息
+# 文字訊息處理
 # -------------------------------
 def handle_text_message(msg):
     text = msg.get("text", "").strip() if msg.get("text") else ""
@@ -43,11 +42,11 @@ def handle_text_message(msg):
     user_id = user.get("id")
     user_name = user.get("first_name", "")
 
-    print(f"DEBUG 收到文字訊息：{text} 來自 user_id={user_id} chat_id={chat_id}")
+    print(f"DEBUG 收到訊息: {text} 來自 {user_id} in {chat_id}")  # DEBUG
 
     # 清理過期 pending
     cleanup_expired_pending()
-    add_group(chat_id, chat_type)      
+    add_group(chat_id, chat_type)
 
     # pending 優先處理
     pending = get_pending_for(user_id)
@@ -74,7 +73,7 @@ def handle_text_message(msg):
 
     # /list 指令
     if text == "/list":
-        shift_text = generate_latest_shift_list() 
+        shift_text = generate_latest_shift_list()
         buttons = [
             [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
             [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
@@ -90,7 +89,7 @@ def handle_text_message(msg):
     send_message(chat_id, "💡 請使用 /list 查看可預約時段。")
 
 # -------------------------------
-# 啟動背景線程（整點公告 + 自動詢問）
+# 啟動背景線程
 # -------------------------------
 threading.Thread(target=auto_announce, daemon=True).start()
 threading.Thread(target=ask_arrivals_thread, daemon=True).start()
@@ -99,6 +98,4 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # 啟動 Flask
 # -------------------------------
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))  # ZEABUR 自動提供 PORT
-    print(f"DEBUG Flask 啟動，PORT={port}")
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
