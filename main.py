@@ -298,7 +298,11 @@ def handle_text_message(msg):
             print(f"🧹 清除過期 pending: {expired}")
     except Exception as e:
         print("❌ pending 自動清理錯誤:", e)
-
+        
+    pending = get_pending_for(user_id)
+    if pending:
+        handle_pending_action(user_id, chat_id, text, pending)
+        return
     # ----------------- 新群組自動記錄 -----------------
     add_group(chat_id, chat_type)
 
