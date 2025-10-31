@@ -32,6 +32,22 @@ TZ = ZoneInfo("Asia/Taipei")  # 台灣時區
 double_staffs = {}  # 用於紀錄雙人服務
 first_notify_sent = {}  # key = f"{hhmm}|{name}|business_chat_id"
 asked_shifts = set()
+# -------------------------------
+# JSON 讀寫鎖
+# -------------------------------
+json_lock = threading.Lock()
+
+def save_json_file(path, data):
+    with json_lock:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+def load_json_file(path, default=None):
+    with json_lock:
+        if not os.path.exists(path):
+            return default or {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
 # -------------------------------
 # pending 狀態（persist 到檔案，key = user_id 字串）
@@ -96,13 +112,6 @@ def get_group_ids_by_type(group_type=None):
 # JSON 存取（每日檔）
 # -------------------------------
 def data_path_for(day): return os.path.join(DATA_DIR, f"{day}.json")
-
-def load_json_file(path, default=None):
-    if not os.path.exists(path): return default or {}
-    with open(path, "r", encoding="utf-8") as f: return json.load(f)
-
-def save_json_file(path, data):
-    with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
 def ensure_today_file(workers=3):
     today = datetime.now(TZ).date().isoformat()
@@ -301,8 +310,22 @@ def handle_text_message(msg):
 
     # ----------------- 指令處理 -----------------
     if text == "/help":
-        send_message(chat_id, HELP_TEXT)
-        return
+        help_text = """
+📌 *Telegram 預約機器人指令說明* 📌
+
+一般使用者：
+- 按 /list 來查看時段並用按鈕操作
+
+管理員：
+- 刪除 13:00 all
+- 刪除 13:00 2
+- 刪除 13:00 小明
+- /addshift HH:MM 限制
+- /updateshift HH:MM 限制
+- /STAFF 設定本群為服務員群組
+"""
+        send_message(chat_id, help_text)
+        return    
 
     if text.startswith("/STAFF"):
         if user_id not in ADMIN_IDS:
@@ -856,15 +879,10 @@ def handle_callback_query(cq):
         return
     # ---------------- 取消 流程 ----------------   
     if data == "cancel_flow":
-        # 清掉該用戶的 pending
-        if user_id in pendings:
-            pendings.pop(user_id)
-        # 回覆用戶
+        clear_pending_for(user_id)
         send_message(chat_id, "❌ 已取消操作。")
-        # 回覆 callback，避免 Telegram 顯示「加載中」
         answer_callback(callback_id)
         return
-
     # ---------------- noop 按鈕（無效） ----------------
     answer_callback(callback_id, text="⚠️ 此按鈕暫時無效")
 
