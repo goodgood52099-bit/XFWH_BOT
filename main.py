@@ -286,6 +286,8 @@ def handle_text_message(msg):
     user_id = user.get("id")
     user_name = user.get("first_name", "")
 
+    pending_dict = load_pending()    
+    print("DEBUG: pending_dict =", pending_dict)    
     # ----------------- 自動清理過期 pending（3 分鐘） -----------------
     try:
         pending_data = load_json_file("data/pending.json")
