@@ -306,12 +306,6 @@ def handle_text_message(msg):
     # ----------------- 新群組自動記錄 -----------------
     add_group(chat_id, chat_type)
 
-    # ----------------- pending 處理 -----------------
-    pending = get_pending_for(user_id)
-    if pending:
-        handle_pending_action(user_id, chat_id, text, pending)
-        return
-
     # ----------------- 指令處理 -----------------
     if text == "/help":
         help_text = """
@@ -756,16 +750,81 @@ def handle_confirm_cancel(chat_id, user_id, hhmm, name, callback_id):
     send_message(chat_id, f"✅ 已取消 {hhmm} {name} 的預約")
     answer_callback(callback_id)
 
-# -------------------------------
-# staff 流程處理（上班、輸入客資、未消、雙人服務、完成、修正）
-# -------------------------------
-def handle_staff_flow(user_id, chat_id, data, callback_id):
-    # 直接使用函式而非 lambda tuple
-    def reply(text, buttons=None):
-        send_message(chat_id, text, buttons=buttons)
-        answer_callback(callback_id)
 
-    # ---------------- 上班通知 ----------------
+# -------------------------------
+# Telegram callback query 處理
+# -------------------------------
+def handle_callback_query(cq):
+    callback_id = cq["id"]
+    data = cq["data"]
+    user_id = cq["from"]["id"]
+    chat_id = cq["message"]["chat"]["id"]
+
+    print(f"DEBUG callback_query: {data} from {user_id} in {chat_id}")
+
+    # ---------------- 主按鈕（預約 / 客到 / 修改 / 取消） ----------------
+    if data.startswith("main|"):
+        action = data.split("|")[1]
+        handle_main(user_id, chat_id, action, callback_id)
+        return
+
+    # ---------------- 預約選擇時段 ----------------
+    if data.startswith("reserve_pick|"):
+        hhmm = data.split("|")[1]
+        set_pending_for(user_id, {
+            "action": "reserve_wait_name",
+            "hhmm": hhmm,
+            "group_chat": chat_id,
+            "created_at": time.time()
+        })
+        send_message(chat_id, f"✏️ 請輸入要預約 {hhmm} 的姓名：")
+        answer_callback(callback_id)
+        return
+
+    # ---------------- 客到選擇 ----------------
+    if data.startswith("arrive_select|"):
+        _, hhmm, name = data.split("|")
+        set_pending_for(user_id, {
+            "action": "arrive_wait_amount",
+            "hhmm": hhmm,
+            "name": name,
+            "group_chat": chat_id,
+            "created_at": time.time()
+        })
+        send_message(chat_id, f"✏️ 請輸入 {hhmm} {name} 的金額：")
+        answer_callback(callback_id)
+        return
+
+    # ---------------- 修改預約選擇 ----------------
+    if data.startswith("modify_pick|"):
+        _, old_hhmm, old_name = data.split("|")
+        handle_modify_pick(user_id, chat_id, old_hhmm, old_name)
+        answer_callback(callback_id)
+        return
+
+    # 修改目標時段
+    if data.startswith("modify_to|"):
+        _, old_hhmm, old_name, new_hhmm = data.split("|")
+        set_pending_for(user_id, {
+            "action": "modify_wait_name",
+            "old_hhmm": old_hhmm,
+            "old_name": old_name,
+            "new_hhmm": new_hhmm,
+            "group_chat": chat_id,
+            "created_at": time.time()
+        })
+        send_message(chat_id, f"✏️ 請輸入新的名稱來修改 {old_hhmm} {old_name} → {new_hhmm}")
+        answer_callback(callback_id)
+        return
+
+    # ---------------- 取消預約 ----------------
+    if data.startswith("cancel_pick|"):
+        _, hhmm, name = data.split("|")
+        handle_confirm_cancel(chat_id, user_id, hhmm, name, callback_id)
+        return
+
+    # ---------------- staff 流程 ----------------
+     # ---------------- 上班通知 ----------------
     if data.startswith("staff_up|"):
         parts = data.split("|", 3)
         if len(parts) < 4:
@@ -883,84 +942,6 @@ def handle_staff_flow(user_id, chat_id, data, callback_id):
         print("DEBUG pending set (fix->input_client):", pending_data)
         send_message(chat_id, "✏️ 請重新輸入客資（格式：小美 25 Alice 3000）")
         answer_callback(callback_id)
-        return
-
-# -------------------------------
-# Telegram callback query 處理
-# -------------------------------
-def handle_callback_query(cq):
-    callback_id = cq["id"]
-    data = cq["data"]
-    user_id = cq["from"]["id"]
-    chat_id = cq["message"]["chat"]["id"]
-
-    print(f"DEBUG callback_query: {data} from {user_id} in {chat_id}")
-
-    # ---------------- 主按鈕（預約 / 客到 / 修改 / 取消） ----------------
-    if data.startswith("main|"):
-        action = data.split("|")[1]
-        handle_main(user_id, chat_id, action, callback_id)
-        return
-
-    # ---------------- 預約選擇時段 ----------------
-    if data.startswith("reserve_pick|"):
-        hhmm = data.split("|")[1]
-        set_pending_for(user_id, {
-            "action": "reserve_wait_name",
-            "hhmm": hhmm,
-            "group_chat": chat_id,
-            "created_at": time.time()
-        })
-        send_message(chat_id, f"✏️ 請輸入要預約 {hhmm} 的姓名：")
-        answer_callback(callback_id)
-        return
-
-    # ---------------- 客到選擇 ----------------
-    if data.startswith("arrive_select|"):
-        _, hhmm, name = data.split("|")
-        set_pending_for(user_id, {
-            "action": "arrive_wait_amount",
-            "hhmm": hhmm,
-            "name": name,
-            "group_chat": chat_id,
-            "created_at": time.time()
-        })
-        send_message(chat_id, f"✏️ 請輸入 {hhmm} {name} 的金額：")
-        answer_callback(callback_id)
-        return
-
-    # ---------------- 修改預約選擇 ----------------
-    if data.startswith("modify_pick|"):
-        _, old_hhmm, old_name = data.split("|")
-        handle_modify_pick(user_id, chat_id, old_hhmm, old_name)
-        answer_callback(callback_id)
-        return
-
-    # 修改目標時段
-    if data.startswith("modify_to|"):
-        _, old_hhmm, old_name, new_hhmm = data.split("|")
-        set_pending_for(user_id, {
-            "action": "modify_wait_name",
-            "old_hhmm": old_hhmm,
-            "old_name": old_name,
-            "new_hhmm": new_hhmm,
-            "group_chat": chat_id,
-            "created_at": time.time()
-        })
-        send_message(chat_id, f"✏️ 請輸入新的名稱來修改 {old_hhmm} {old_name} → {new_hhmm}")
-        answer_callback(callback_id)
-        return
-
-    # ---------------- 取消預約 ----------------
-    if data.startswith("cancel_pick|"):
-        _, hhmm, name = data.split("|")
-        handle_confirm_cancel(chat_id, user_id, hhmm, name, callback_id)
-        return
-
-    # ---------------- staff 流程 ----------------
-    staff_prefixes = ["staff_up|","input_client|","not_consumed|","double|","complete|","fix|"]
-    if any(data.startswith(p) for p in staff_prefixes):
-        handle_staff_flow(user_id, chat_id, data, callback_id)
         return
     # ---------------- 取消 流程 ----------------   
     if data == "cancel_flow":
