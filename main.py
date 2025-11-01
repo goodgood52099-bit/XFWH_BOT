@@ -718,7 +718,7 @@ def _pending_double_wait_second(user_id, text, pending):
 # -------------------------------
 # callback_query 處理（按鈕）
 # -------------------------------
-@app.route("/webhook", methods=["POST"])
+@app.route("/", methods=["POST"])
 def webhook():
     try:
         update = request.get_json()
@@ -1026,7 +1026,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 # Flask Webhook 入口
 # -------------------------------
-@app.route("/webhook", methods=["POST"])
+@app.route("/", methods=["POST"])
 def webhook():
     try:
         update = request.get_json(force=True)
@@ -1044,6 +1044,7 @@ def webhook():
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
