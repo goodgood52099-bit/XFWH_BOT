@@ -1125,6 +1125,10 @@ def webhook():
                     answer_callback(callback_id, "⚠️ 此按鈕已被使用過。")
                     return {"ok": True}
 
+                # 先處理移除 in_progress
+                handle_staff_up(user_id, chat_id, data, callback_id)
+
+                # 再發通知給業務 + 顯示服務員按鈕
                 _, hhmm, name, business_chat_id = data.split("|", 3)
                 send_message(int(business_chat_id), f"⬆️ 上 {hhmm} {name}")
 
@@ -1133,8 +1137,9 @@ def webhook():
                     {"text": "未消", "callback_data": f"not_consumed|{hhmm}|{name}|{business_chat_id}"}
                 ]]
                 send_message(chat_id, f"✅ 已通知業務 {name}", buttons=staff_buttons)
-                answer_callback(callback_id)
+                # answer_callback 已在 handle_staff_up 處理，不需要再呼叫一次
                 return {"ok": True}
+
                 
             # 服務員 -> 輸入客資
             if data and data.startswith("input_client|"):
@@ -1340,6 +1345,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
