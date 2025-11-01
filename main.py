@@ -103,7 +103,7 @@ def has_pending_for(user_id):
 # 群組管理
 # -------------------------------
 GROUP_FILE = os.path.join(DATA_DIR, "groups.json")
-STAFF_GROUP_ID = -123456789  # 固定服務員群組ID
+STAFF_GROUP_ID = -1003119493503  # 固定服務員群組ID
 
 def load_groups():
     """載入群組資料，確保固定服務員群組存在"""
@@ -170,11 +170,13 @@ def ensure_today_file(workers=3):
     # 每天生成新檔時清空已使用按鈕
     clear_used_staff_buttons()
 
+    # 如果檔案存在，但日期不是今天，刪除舊檔
     if os.path.exists(path):
         data = load_json_file(path)
         if data.get("date") != today:
             os.remove(path)
 
+    # 如果檔案不存在，建立今天的檔案
     if not os.path.exists(path):
         shifts = []
         for h in range(13, 23):  # 13:00 ~ 22:00
@@ -187,9 +189,23 @@ def ensure_today_file(workers=3):
                     "bookings": [],
                     "in_progress": []
                 })
-        save_json_file(path, {"date": today, "shifts": shifts, "候補": []})
+        data = {"date": today, "shifts": shifts, "候補": []}
+        save_json_file(path, data)
+    else:
+        # 確保已存在的檔案裡的 "shifts" 和 "候補" 是列表
+        data = load_json_file(path)
+        modified = False
+        if "shifts" not in data or not isinstance(data["shifts"], list):
+            data["shifts"] = []
+            modified = True
+        if "候補" not in data or not isinstance(data["候補"], list):
+            data["候補"] = []
+            modified = True
+        if modified:
+            save_json_file(path, data)
 
     return path
+
 
 def find_shift(shifts, hhmm):
     return next((s for s in shifts if s.get("time") == hhmm), None)
@@ -1316,5 +1332,6 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
