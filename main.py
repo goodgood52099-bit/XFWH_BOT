@@ -905,9 +905,9 @@ def _pending_fix(user_id, text, pending):
     # 清除 pending
     clear_pending_for(user_id)
     return {"ok": True}
-# -----------------------------------
+# -------------------------------
 # 服務員群按「上」 → 從已報到中移除該客人（只刪除，不通知）
-# -----------------------------------
+# -------------------------------
 def handle_staff_up(user_id, chat_id, data, callback_id):
     try:
         _, hhmm, name, business_chat_id = data.split("|")
@@ -924,27 +924,29 @@ def handle_staff_up(user_id, chat_id, data, callback_id):
         answer_callback(callback_id, f"⚠️ 找不到時段 {hhmm}")
         return
 
-    in_progress = shift.get("in_progress", [])
-    if not in_progress:
-        answer_callback(callback_id, f"⚠️ {hhmm} 沒有已報到的客人")
-        return
-
-    # 找出要移除的客人（依名字比對）
+    # 移除 in_progress 中的客人
     removed_item = None
+    in_progress = shift.get("in_progress", [])
     for i, item in enumerate(in_progress):
-        if isinstance(item, dict):
-            if item.get("name") == name:
-                removed_item = in_progress.pop(i)
-                break
+        if isinstance(item, dict) and item.get("name") == name:
+            removed_item = in_progress.pop(i)
+            break
         elif str(item) == name:
             removed_item = in_progress.pop(i)
             break
+
+    # 確保 bookings 中也不再出現（防止列表殘留）
+    shift["bookings"] = [
+        b for b in shift.get("bookings", [])
+        if (isinstance(b, dict) and b.get("name") != name) or b == name
+    ]
 
     if removed_item:
         save_json_file(path, data_json)
 
     # 回覆 callback，完成操作
     answer_callback(callback_id)
+
    
 # -------------------------------
 # callback_query 處理（按鈕）
@@ -1338,6 +1340,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
