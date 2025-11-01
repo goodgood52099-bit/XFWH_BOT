@@ -63,7 +63,10 @@ def clear_pending_for(user_id):
     if str(user_id) in p:
         del p[str(user_id)]
         save_pending(p)
-
+        
+def has_pending_for(user_id):
+    """檢查使用者是否已有 pending"""
+    return get_pending_for(user_id) is not None
 
 # -------------------------------
 # 群組管理
@@ -938,13 +941,17 @@ def webhook():
 
             # 服務員 -> 輸入客資
             if data and data.startswith("input_client|"):
+                if has_pending_for(user_id):
+                    answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
+                    return {"ok": True}
+
                 _, hhmm, name, business_chat_id = data.split("|", 3)
                 set_pending_for(user_id, {
                     "action": "input_client",
                     "hhmm": hhmm,
                     "business_name": name,
-                    "business_chat_id": business_chat_id
-                    "chat_id": staff_chat_id
+                    "business_chat_id": business_chat_id,
+                    "chat_id": chat_id
                 })
                 send_message(chat_id, "✏️ 請輸入客稱、年紀、服務人員與金額（格式：小帥 25 小美 3000）")
                 answer_callback(callback_id)
@@ -952,13 +959,17 @@ def webhook():
 
             # 服務員 -> 未消
             if data and data.startswith("not_consumed|"):
+                if has_pending_for(user_id):
+                    answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
+                    return {"ok": True}
+                    
                 _, hhmm, name, business_chat_id = data.split("|", 3)
                 set_pending_for(user_id, {
                     "action": "not_consumed_wait_reason",
                     "hhmm": hhmm,
                     "name": name,
-                    "business_chat_id": business_chat_id
-                    "chat_id": staff_chat_id
+                    "business_chat_id": business_chat_id,
+                    "chat_id": chat_id
                 })
                 send_message(chat_id, "✏️ 請輸入未消原因：")
                 answer_callback(callback_id)
@@ -966,6 +977,9 @@ def webhook():
 
             # 雙人服務（按鈕觸發）
             if data and data.startswith("double|"):
+                if has_pending_for(user_id):
+                    answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
+                    return {"ok": True}
                 _, hhmm, business_name, business_chat_id = data.split("|")
                 first_staff = get_staff_name(user_id)
 
@@ -975,8 +989,8 @@ def webhook():
                     "hhmm": hhmm,
                     "business_name": business_name,
                     "business_chat_id": business_chat_id,
-                    "first_staff": first_staff
-                    "chat_id": staff_chat_id
+                    "first_staff": first_staff,
+                    "chat_id": chat_id
                 })
 
                 send_message(chat_id, f"✏️ 請輸入另一位服務員名字，與 {first_staff} 配合雙人服務")
@@ -985,6 +999,9 @@ def webhook():
 
             # 完成服務
             if data and data.startswith("complete|"):
+                if has_pending_for(user_id):
+                    answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
+                    return {"ok": True}
                 _, hhmm, business_name, business_chat_id = data.split("|", 3)
 
                 # 支援雙人服務
@@ -997,8 +1014,8 @@ def webhook():
                     "hhmm": hhmm,
                     "business_name": business_name,
                     "business_chat_id": business_chat_id,
-                    "staff_list": staff_list
-                    "chat_id": staff_chat_id
+                    "staff_list": staff_list,
+                    "chat_id": chat_id
                 })
 
                 send_message(chat_id, f"✏️ 請輸入 {hhmm} {business_name} 的總金額（數字）：")
@@ -1007,13 +1024,16 @@ def webhook():
 
             # 修正 -> 重新輸入客資
             if data and data.startswith("fix|"):
+                if has_pending_for(user_id):
+                    answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
+                    return {"ok": True}
                 _, hhmm, business_name, business_chat_id = data.split("|", 3)
                 set_pending_for(user_id, {
                     "action": "input_client",
                     "hhmm": hhmm,
                     "business_name": business_name,
-                    "business_chat_id": business_chat_id
-                    "chat_id": staff_chat_id
+                    "business_chat_id": business_chat_id,
+                    "chat_id": chat_id
                 })
                 send_message(chat_id, "✏️ 請重新輸入客資（格式：小美 25 Alice 3000）")
                 answer_callback(callback_id)
@@ -1093,6 +1113,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
