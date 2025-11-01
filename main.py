@@ -168,10 +168,19 @@ def send_request(method, payload):
 
 
 def send_message(chat_id, text, buttons=None, parse_mode="Markdown"):
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": parse_mode
+    }
     if buttons:
         payload["reply_markup"] = {"inline_keyboard": buttons}
-    return send_request("sendMessage", payload)
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    print(f"DEBUG: send_message payload={payload}")
+    r = requests.post(url, json=payload)
+    print(f"DEBUG: send_message response: {r.text}")
+    return r.json()
 
 
 def answer_callback(callback_id, text=None, show_alert=False):
@@ -286,32 +295,45 @@ def handle_text_message(msg):
     user_id = user.get("id")
     user_name = user.get("first_name", "")
 
+    print(f"DEBUG: 收到訊息: user_id={user_id}, chat_id={chat_id}, text={text}")
+
     # 新群組自動記錄為 business
     add_group(chat_id, chat_type)
+    print(f"DEBUG: 群組列表: {load_groups()}")
 
     # 1️⃣ 處理 pending（等待輸入的動作）
     pending = get_pending_for(user_id)
+    print(f"DEBUG: pending={pending}")
     if pending:
+        print("DEBUG: 有 pending，交給 _handle_pending")
         return _handle_pending(user_id, chat_id, text, pending)
 
     # 2️⃣ 一般指令
     if text == "/help":
+        print("DEBUG: 執行 /help")
         return _cmd_help(chat_id)
 
     if text.startswith("/STAFF"):
+        print("DEBUG: 執行 /STAFF")
         return _cmd_staff(chat_id, user_id)
 
     if text == "/list":
+        print("DEBUG: 執行 /list")
         return _cmd_list(chat_id)
 
     # 3️⃣ 管理員指令
     if user_id in ADMIN_IDS:
         if text.startswith("/addshift"):
+            print("DEBUG: 執行 /addshift")
             return _add_shift(chat_id, text)
         elif text.startswith("/updateshift"):
+            print("DEBUG: 執行 /updateshift")
             return _update_shift(chat_id, text)
         elif text.startswith("刪除"):
+            print("DEBUG: 執行 刪除")
             return _delete_shift_entry(chat_id, text)
+
+    print("DEBUG: 未匹配的訊息指令")
 # -------------------------------
 # 管理員刪除功能入口
 # -------------------------------
@@ -476,13 +498,20 @@ def _cmd_staff(chat_id, user_id):
     send_message(chat_id, "✅ 已將本群組設定為服務員群組")
 
 def _cmd_list(chat_id):
+    print("DEBUG: _cmd_list 被呼叫")
+
     shift_text = generate_latest_shift_list()
+    print(f"DEBUG: shift_text=\n{shift_text}")
+
     buttons = [
-        [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
-        [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
+        [{"text": "預約", "callback_data": "main|reserve"},
+         {"text": "客到", "callback_data": "main|arrive"}],
+        [{"text": "修改預約", "callback_data": "main|modify"},
+         {"text": "取消預約", "callback_data": "main|cancel"}],
     ]
-    # parse_mode=None 避免 emoji 與 Markdown 解析錯誤
+
     send_message(chat_id, shift_text, buttons=buttons, parse_mode=None)
+    print("DEBUG: _cmd_list 發送訊息完成")
 
 # -------------------------------
 # Pending 分流
@@ -1029,6 +1058,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
