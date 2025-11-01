@@ -109,11 +109,16 @@ def load_groups():
     """載入群組資料，確保固定服務員群組存在"""
     groups = load_json_file(GROUP_FILE, default=[])
     
+    # 安全檢查：如果讀到的不是 list，強制修正
+    if not isinstance(groups, list):
+        print("⚠️ groups.json 格式錯誤，已自動修正")
+        groups = []
+
     # 確保固定服務員群組存在
-    if not any(g["id"] == STAFF_GROUP_ID for g in groups):
+    if not any(g.get("id") == STAFF_GROUP_ID for g in groups):
         groups.append({"id": STAFF_GROUP_ID, "type": "staff"})
         save_groups(groups)
-    
+
     return groups
 
 def save_groups(groups):
@@ -125,7 +130,7 @@ def add_group(chat_id, chat_type):
     groups = load_groups()
 
     # 如果群組已存在就直接返回
-    if any(g["id"] == chat_id for g in groups):
+    if any(g.get("id") == chat_id for g in groups):
         return
 
     if chat_type in ["group", "supergroup"]:
@@ -137,8 +142,9 @@ def get_group_ids_by_type(group_type=None):
     """取得指定角色的群組ID"""
     groups = load_groups()
     if group_type:
-        return [g["id"] for g in groups if g.get("type") == group_type]
-    return [g["id"] for g in groups]
+        return [g.get("id") for g in groups if g.get("type") == group_type]
+    return [g.get("id") for g in groups]
+
 
 
 # -------------------------------
@@ -1332,6 +1338,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
