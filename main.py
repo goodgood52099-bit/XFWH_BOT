@@ -629,9 +629,13 @@ def _pending_input_client(user_id, text, pending):
         print(f"❌ DEBUG: pending 資料錯誤: {pending}")
         return {"ok": False, "error": "chat_id or business_chat_id is None"}
 
-    # 確保是整數
-    chat_id = int(chat_id)
-    business_chat_id = int(business_chat_id)
+    try:
+        chat_id = int(chat_id)
+        business_chat_id = int(business_chat_id)
+    except ValueError:
+        print(f"❌ DEBUG: chat_id 或 business_chat_id 不是整數: {pending}")
+        return {"ok": False, "error": "chat_id or business_chat_id invalid"}
+
     try:
         client_name, age, staff_name, amount = text.split()
     except ValueError:
@@ -687,11 +691,18 @@ def _pending_not_consumed_wait_reason(user_id, text, pending):
     # 發給服務員群（如果 chat_id 存在）
     staff_chat_id = pending.get("chat_id")
     if staff_chat_id:
-        send_message(int(staff_chat_id), f"掰掰謝謝光臨!!")  # 發給服務員群確認
+        try:
+            send_message(int(staff_chat_id), "掰掰謝謝光臨!!")  # 發給服務員群確認
+        except Exception as e:
+            print(f"❌ DEBUG: 發送給服務員群失敗: {e}, chat_id={staff_chat_id}")
 
     # 發給業務群
-    msg = f"⚠️ 未消: {name} {reason}"
-    send_message(int(business_chat_id), msg)
+    business_chat_id = pending.get("business_chat_id")
+    if business_chat_id:
+        try:
+            send_message(int(business_chat_id), f"⚠️ 未消: {name} {reason}")
+        except Exception as e:
+            print(f"❌ DEBUG: 發送給業務群失敗: {e}, chat_id={business_chat_id}")
 
     clear_pending_for(user_id)
     return {"ok": True}
@@ -742,7 +753,8 @@ def _pending_modify_wait_name(user_id, text, pending):
         [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
     ]
     broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
-    send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
+    if group_chat:
+        send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
     clear_pending_for(user_id)
 
 # 雙人服務
@@ -757,7 +769,8 @@ def _pending_double_wait_second(user_id, text, pending):
     double_staffs[hhmm] = [first_staff, second_staff]
     staff_list = "、".join(double_staffs[hhmm])
 
-    send_message(int(business_chat_id), f"👥 雙人服務更新：{staff_list}")
+    if business_chat_id:
+        send_message(int(business_chat_id), f"👥 雙人服務更新：{staff_list}")
     clear_pending_for(user_id)
     return {"ok": True}
 
@@ -1080,6 +1093,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
