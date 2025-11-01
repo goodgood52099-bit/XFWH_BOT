@@ -339,6 +339,7 @@ def pending_cleaner_thread():
         return
 
     if text == "/list":
+        clear_pending_for(user_id)
         shift_text = generate_latest_shift_list() 
         buttons = [
             [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
@@ -1059,4 +1060,5 @@ def webhook():
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
