@@ -228,7 +228,13 @@ def generate_latest_shift_list():
         regular_in_progress = [x for x in in_progress if not str(x).endswith("(候補)")]
         backup_in_progress = [x for x in in_progress if str(x).endswith("(候補)")]
 
-        checked_in_lines.extend(f"{time_label} {x} ✅" for x in regular_in_progress + backup_in_progress)
+        for entry in regular_in_progress + backup_in_progress:
+            if isinstance(entry, dict):
+                name = entry.get("name", "")
+                amount = entry.get("amount", "")
+                checked_in_lines.append(f"{time_label} {name} ✅")
+            else:
+                checked_in_lines.append(f"{time_label} {entry} ✅")
 
         for b in bookings:
             name = b.get("name") if isinstance(b, dict) else b
@@ -249,6 +255,7 @@ def generate_latest_shift_list():
         text += "\n\n【已報到】\n" + "\n".join(checked_in_lines)
 
     return text
+
 
 
 # -------------------------------
@@ -832,7 +839,47 @@ def _pending_fix(user_id, text, pending):
     # 清除 pending
     clear_pending_for(user_id)
     return {"ok": True}
+# -----------------------------------
+# 服務員群按「上」 → 從已報到中移除該客人（只刪除，不通知）
+# -----------------------------------
+def handle_staff_up(user_id, chat_id, data, callback_id):
+    try:
+        _, hhmm, name, business_chat_id = data.split("|")
+    except ValueError:
+        answer_callback(callback_id, "⚠️ callback 資料錯誤")
+        return
 
+    path = ensure_today_file()
+    data_json = load_json_file(path)
+
+    # 找出該時段
+    shift = find_shift(data_json.get("shifts", []), hhmm)
+    if not shift:
+        answer_callback(callback_id, f"⚠️ 找不到時段 {hhmm}")
+        return
+
+    in_progress = shift.get("in_progress", [])
+    if not in_progress:
+        answer_callback(callback_id, f"⚠️ {hhmm} 沒有已報到的客人")
+        return
+
+    # 找出要移除的客人（依名字比對）
+    removed_item = None
+    for i, item in enumerate(in_progress):
+        if isinstance(item, dict):
+            if item.get("name") == name:
+                removed_item = in_progress.pop(i)
+                break
+        elif str(item) == name:
+            removed_item = in_progress.pop(i)
+            break
+
+    if removed_item:
+        save_json_file(path, data_json)
+
+    # 回覆 callback，完成操作
+    answer_callback(callback_id)
+   
 # -------------------------------
 # callback_query 處理（按鈕）
 # -------------------------------
@@ -1195,6 +1242,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
