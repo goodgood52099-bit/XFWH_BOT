@@ -626,6 +626,7 @@ def _pending_arrive_wait_amount(user_id, text, pending):
 def _pending_input_client(user_id, text, pending):
     chat_id = pending.get("chat_id")
     business_chat_id = pending.get("business_chat_id")
+    action_source = pending.get("action")  # 新增這行
 
     # 防呆檢查
     if chat_id is None or business_chat_id is None:
@@ -639,6 +640,7 @@ def _pending_input_client(user_id, text, pending):
         print(f"❌ DEBUG: chat_id 或 business_chat_id 不是整數: {pending}")
         return {"ok": False, "error": "chat_id or business_chat_id invalid"}
 
+    # 拆文字
     try:
         client_name, age, staff_name, amount = text.split()
     except ValueError:
@@ -647,21 +649,28 @@ def _pending_input_client(user_id, text, pending):
 
     hhmm = pending["hhmm"]
     business_name = pending["business_name"]
-    business_chat_id = pending["business_chat_id"]
 
-    msg_business = f"📌 客\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}"
-    send_message(int(business_chat_id), msg_business, parse_mode="HTML")
+    # 判斷是否是修正
+    if action_source == "fix":
+        prefix = "🛠 修正後客資"
+    else:
+        prefix = "📌 客資"
+
+    msg_business = f"{prefix}\n時間: {hhmm} {client_name}{age} {business_name}{amount}\n服務人員: {staff_name}"
+    send_message(business_chat_id, msg_business, parse_mode="HTML")
 
     staff_buttons = [
         [
-            {"text": "雙", "callback_data": f"double|{hhmm}|{business_name}|{business_chat_id}"},
-            {"text": "完成服務", "callback_data": f"complete|{hhmm}|{business_name}|{business_chat_id}"},
-            {"text": "修正", "callback_data": f"fix|{hhmm}|{business_name}|{business_chat_id}"}
+            {"text": "雙", "callback_data": f"double|{hhmm}|{business_name}|{business_chat_id}|{staff_name}"},
+            {"text": "完成服務", "callback_data": f"complete|{hhmm}|{business_name}|{business_chat_id}|{staff_name}"},
+            {"text": "修正", "callback_data": f"fix|{hhmm}|{business_name}|{business_chat_id}|{staff_name}"}
         ]
     ]
-    send_message(int(chat_id), msg_business, buttons=staff_buttons, parse_mode="HTML")
+    send_message(chat_id, msg_business, buttons=staff_buttons, parse_mode="HTML")
+
     clear_pending_for(user_id)
     return {"ok": True}
+
 
 # 完成服務輸入金額
 def _pending_complete_wait_amount(user_id, text, pending):
@@ -774,6 +783,53 @@ def _pending_double_wait_second(user_id, text, pending):
 
     if business_chat_id:
         send_message(int(business_chat_id), f"👥 雙人服務更新：{staff_list}")
+    clear_pending_for(user_id)
+    return {"ok": True}
+# -------------------------------
+# 修正客資
+# -------------------------------
+def _pending_fix(user_id, text, pending):
+    chat_id = pending.get("chat_id")
+    business_chat_id = pending.get("business_chat_id")
+
+    # 防呆檢查
+    if chat_id is None or business_chat_id is None:
+        print(f"❌ DEBUG: pending 資料錯誤: {pending}")
+        return {"ok": False, "error": "chat_id or business_chat_id is None"}
+
+    try:
+        chat_id = int(chat_id)
+        business_chat_id = int(business_chat_id)
+    except ValueError:
+        print(f"❌ DEBUG: chat_id 或 business_chat_id 不是整數: {pending}")
+        return {"ok": False, "error": "chat_id or business_chat_id invalid"}
+
+    # 嘗試解析使用者輸入
+    try:
+        client_name, age, staff_name, amount = text.split()
+    except ValueError:
+        send_message(chat_id, "❌ 格式錯誤，請輸入：小美 25 Alice 3000")
+        return {"ok": True}
+
+    hhmm = pending.get("hhmm")
+    business_name = pending.get("business_name")
+
+    # 發訊息給業務群
+    msg_business = f"📌 客資修正\n時間: {hhmm} {client_name}{age} {business_name}{amount}\n服務人員: {staff_name}"
+    send_message(business_chat_id, msg_business, parse_mode="HTML")
+
+    # 發訊息給服務員群，附上按鈕
+    staff_buttons = [
+        [
+            {"text": "雙", "callback_data": f"double|{hhmm}|{business_name}|{business_chat_id}|{staff_name}"},
+            {"text": "完成服務", "callback_data": f"complete|{hhmm}|{business_name}|{business_chat_id}|{staff_name}"},
+            {"text": "修正", "callback_data": f"fix|{hhmm}|{business_name}|{business_chat_id}|{staff_name}"}
+        ]
+    ]
+
+    send_message(chat_id, msg_business, buttons=staff_buttons, parse_mode="HTML")
+
+    # 清除 pending
     clear_pending_for(user_id)
     return {"ok": True}
 
@@ -980,8 +1036,14 @@ def webhook():
                 if has_pending_for(user_id):
                     answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
                     return {"ok": True}
-                _, hhmm, business_name, business_chat_id = data.split("|")
-                first_staff = get_staff_name(user_id)
+
+                try:
+                    # 新格式：double|hhmm|business_name|business_chat_id|staff_name
+                    _, hhmm, business_name, business_chat_id, first_staff = data.split("|")
+                except ValueError:
+                    # 若舊資料結構（沒有 staff_name），仍相容處理
+                    _, hhmm, business_name, business_chat_id = data.split("|")
+                    first_staff = "未知服務員"
 
                 # 設定 pending 等待輸入第二位服務員
                 set_pending_for(user_id, {
@@ -997,15 +1059,23 @@ def webhook():
                 answer_callback(callback_id)
                 return {"ok": True}
 
+
             # 完成服務
             if data and data.startswith("complete|"):
                 if has_pending_for(user_id):
                     answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
                     return {"ok": True}
-                _, hhmm, business_name, business_chat_id = data.split("|", 3)
+
+                try:
+                    # 新格式：complete|hhmm|business_name|business_chat_id|staff_name
+                    _, hhmm, business_name, business_chat_id, staff_name = data.split("|")
+                except ValueError:
+                    # 若舊格式（沒有 staff_name），仍相容處理
+                    _, hhmm, business_name, business_chat_id = data.split("|")
+                    staff_name = "未知服務員"
 
                 # 支援雙人服務
-                staff_list = double_staffs.get(hhmm, [get_staff_name(user_id)])
+                staff_list = double_staffs.get(hhmm, [staff_name])
                 staff_str = "、".join(staff_list)
 
                 # 設 pending 等待輸入實際金額
@@ -1020,22 +1090,34 @@ def webhook():
 
                 send_message(chat_id, f"✏️ 請輸入 {hhmm} {business_name} 的總金額（數字）：")
                 answer_callback(callback_id)
-                return {"ok": True} 
+                return {"ok": True}
+ 
 
-            # 修正 -> 重新輸入客資
+            # 修正服務紀錄
             if data and data.startswith("fix|"):
                 if has_pending_for(user_id):
                     answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
                     return {"ok": True}
-                _, hhmm, business_name, business_chat_id = data.split("|", 3)
+
+                try:
+                    # 新格式：fix|hhmm|business_name|business_chat_id|staff_name
+                    _, hhmm, business_name, business_chat_id, staff_name = data.split("|")
+                except ValueError:
+                    # 舊格式相容
+                    _, hhmm, business_name, business_chat_id = data.split("|")
+                    staff_name = "未知服務員"
+
+                # 設 pending 等待重新輸入客資
                 set_pending_for(user_id, {
                     "action": "input_client",
                     "hhmm": hhmm,
                     "business_name": business_name,
                     "business_chat_id": business_chat_id,
+                    "staff_name": staff_name,
                     "chat_id": chat_id
                 })
-                send_message(chat_id, "✏️ 請重新輸入客資（格式：小美 25 Alice 3000）")
+
+                send_message(chat_id, f"✏️ 請重新輸入客資（格式：客稱 年齡 服務人員 金額）")
                 answer_callback(callback_id)
                 return {"ok": True}
 
@@ -1113,6 +1195,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
