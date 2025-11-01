@@ -577,9 +577,9 @@ def _pending_arrive_wait_amount(user_id, text, pending):
         shift["bookings"] = [b for b in shift.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == group_chat)]
         save_json_file(path, data)
 
-        send_message(group_chat, f"✅ {hhmm} {name} 已標記到場，金額：{amount}")
+        send_message(group_chat, f"✅ {hhmm} {name} 已客到，金額：{amount}")
 
-        staff_message = f"📌 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
+        staff_message = f"🙋‍♀️ 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
         staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
         broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
 
@@ -1027,3 +1027,4 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
