@@ -6,6 +6,8 @@ from datetime import datetime, time as dt_time
 import threading
 import time
 import traceback
+from filelock import FileLock
+
 
 try:
     from zoneinfo import ZoneInfo
@@ -32,110 +34,93 @@ TZ = ZoneInfo("Asia/Taipei")  # 台灣時區
 double_staffs = {}  # 用於紀錄雙人服務
 asked_shifts = set()
 
+pending_lock = threading.Lock()
+double_lock = threading.Lock()
+staff_buttons_lock = threading.Lock()
 # -------------------------------
 # 已使用的服務員群按鈕（防止重複點擊）
 # -------------------------------
 USED_STAFF_BUTTONS = set()
 
 def staff_button_used(callback_data):
-    """檢查該 callback 是否已使用過"""
-    if callback_data in USED_STAFF_BUTTONS:
-        return True
-    USED_STAFF_BUTTONS.add(callback_data)
-    return False
+    with staff_buttons_lock:
+        if callback_data in USED_STAFF_BUTTONS:
+            return True
+        USED_STAFF_BUTTONS.add(callback_data)
+        return False
 
 def clear_used_staff_buttons():
-    """清空已使用按鈕（每天重置）"""
-    USED_STAFF_BUTTONS.clear()
+    with staff_buttons_lock:
+        USED_STAFF_BUTTONS.clear()
 
-# -------------------------------
-# JSON 讀寫鎖
-# -------------------------------
-json_lock = threading.Lock()
-
-def save_json_file(path, data):
-    with json_lock:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-def load_json_file(path, default=None):
-    with json_lock:
-        if not os.path.exists(path):
-            return default or {}
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
 # -------------------------------
 # pending 狀態（persist 到檔案，key = user_id 字串）
 # -------------------------------
 def load_pending():
-    if os.path.exists(PENDING_FILE):
-        with open(PENDING_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
+    lock_path = f"{PENDING_FILE}.lock"
+    with FileLock(lock_path):
+        if os.path.exists(PENDING_FILE):
+            with open(PENDING_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {}
 
 def save_pending(d):
-    with open(PENDING_FILE, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
-
+    lock_path = f"{PENDING_FILE}.lock"
+    with FileLock(lock_path):
+        with open(PENDING_FILE, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
 
 def set_pending_for(user_id, payload):
-    p = load_pending()
-    p[str(user_id)] = payload
-    save_pending(p)
-
+    lock_path = f"{PENDING_FILE}.lock"
+    with FileLock(lock_path):
+        p = load_pending()
+        p[str(user_id)] = payload
+        save_pending(p)
 
 def get_pending_for(user_id):
-    return load_pending().get(str(user_id))
-
+    lock_path = f"{PENDING_FILE}.lock"
+    with FileLock(lock_path):
+        return load_pending().get(str(user_id))
 
 def clear_pending_for(user_id):
-    p = load_pending()
-    if str(user_id) in p:
-        del p[str(user_id)]
-        save_pending(p)
-        
+    lock_path = f"{PENDING_FILE}.lock"
+    with FileLock(lock_path):
+        p = load_pending()
+        if str(user_id) in p:
+            del p[str(user_id)]
+            save_pending(p)
+
 def has_pending_for(user_id):
-    """檢查使用者是否已有 pending"""
     return get_pending_for(user_id) is not None
 
 # -------------------------------
 # 群組管理
 # -------------------------------
+group_lock = threading.Lock()
 GROUP_FILE = os.path.join(DATA_DIR, "groups.json")
-STAFF_GROUP_ID = -1003119493503  # 固定服務員群組ID
+STAFF_GROUP_ID = -1003119493503
 
 def load_groups():
-    """載入群組資料，確保固定服務員群組存在"""
-    groups = load_json_file(GROUP_FILE, default=[])
-    
-    # 安全檢查：如果讀到的不是 list，強制修正
-    if not isinstance(groups, list):
-        print("⚠️ groups.json 格式錯誤，已自動修正")
-        groups = []
-
-    # 確保固定服務員群組存在
-    if not any(g.get("id") == STAFF_GROUP_ID for g in groups):
-        groups.append({"id": STAFF_GROUP_ID, "type": "staff"})
-        save_groups(groups)
-
-    return groups
+    with group_lock:
+        groups = load_json_file(GROUP_FILE, default=[])
+        if not isinstance(groups, list):
+            groups = []
+        if not any(g.get("id") == STAFF_GROUP_ID for g in groups):
+            groups.append({"id": STAFF_GROUP_ID, "type": "staff"})
+            save_groups(groups)
+        return groups
 
 def save_groups(groups):
-    """存檔"""
-    save_json_file(GROUP_FILE, groups)
+    with group_lock:
+        save_json_file(GROUP_FILE, groups)
 
-def add_group(chat_id, chat_type):
-    """加入新群組，自動判斷群組角色"""
-    groups = load_groups()
-
-    # 如果群組已存在就直接返回
-    if any(g.get("id") == chat_id for g in groups):
-        return
-
-    if chat_type in ["group", "supergroup"]:
-        group_role = "staff" if chat_id == STAFF_GROUP_ID else "business"
-        groups.append({"id": chat_id, "type": group_role})
+def add_group(chat_id, chat_type, group_role=None):
+    with group_lock:
+        groups = load_groups()
+        if any(g.get("id") == chat_id for g in groups):
+            return
+        role = group_role or ("staff" if chat_id == STAFF_GROUP_ID else "business")
+        groups.append({"id": chat_id, "type": role})
         save_groups(groups)
 
 def get_group_ids_by_type(group_type=None):
@@ -145,8 +130,6 @@ def get_group_ids_by_type(group_type=None):
         return [g.get("id") for g in groups if g.get("type") == group_type]
     return [g.get("id") for g in groups]
 
-
-
 # -------------------------------
 # JSON 存取（每日檔）
 # -------------------------------
@@ -155,16 +138,32 @@ def data_path_for(day):
 
 
 def load_json_file(path, default=None):
-    if not os.path.exists(path):
-        return default or {}
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    lock_path = f"{path}.lock"
+    with FileLock(lock_path):
+        if not os.path.exists(path):
+            return default or {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
 
 def save_json_file(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    lock_path = f"{path}.lock"
+    with FileLock(lock_path):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+# -------------------------------
+# 安全檔案修改封裝（加鎖）
+# -------------------------------
+def safe_modify_today_file(callback):
+    path = ensure_today_file()
+    lock_path = f"{path}.lock"
+    with FileLock(lock_path):
+        # 讀取、修改、寫入都在同一個鎖內，保證原子性
+        data = load_json_file(path)
+        callback(data)
+        save_json_file(path, data)
 
+      
 # -------------------------------
 # 每日排班檔生成
 # -------------------------------
@@ -387,11 +386,6 @@ def handle_text_message(msg):
     if text == "/help":
         print("DEBUG: 執行 /help")
         return _cmd_help(chat_id)
-
-    if text.startswith("/STAFF"):
-        print("DEBUG: 執行 /STAFF")
-        return _cmd_staff(chat_id, user_id)
-
     if text == "/list":
         print("DEBUG: 執行 /list")
         return _cmd_list(chat_id)
@@ -511,16 +505,14 @@ def _add_shift(chat_id, text):
         send_message(chat_id, "⚠️ 限制人數必須為數字")
         return
 
-    path = ensure_today_file()
-    data = load_json_file(path)
+    def callback(data):
+        if find_shift(data.get("shifts", []), hhmm):
+            send_message(chat_id, f"⚠️ {hhmm} 已存在")
+            return
+        data["shifts"].append({"time": hhmm, "limit": limit, "bookings": [], "in_progress": []})
+        send_message(chat_id, f"✅ 新增 {hhmm} 時段，限制 {limit} 人")
 
-    if find_shift(data.get("shifts", []), hhmm):
-        send_message(chat_id, f"⚠️ {hhmm} 已存在")
-        return
-
-    data["shifts"].append({"time": hhmm, "limit": limit, "bookings": [], "in_progress": []})
-    save_json_file(path, data)
-    send_message(chat_id, f"✅ 新增 {hhmm} 時段，限制 {limit} 人")
+    safe_modify_today_file(callback)
 
 
 # -------------------------------
@@ -567,13 +559,6 @@ def _cmd_help(chat_id):
 - /STAFF 設定本群為服務員群組
 """
     send_message(chat_id, help_text)
-
-def _cmd_staff(chat_id, user_id):
-    if user_id not in ADMIN_IDS:
-        send_message(chat_id, "⚠️ 你沒有權限設定服務員群組")
-        return
-    add_group(chat_id, "group", group_role="staff")
-    send_message(chat_id, "✅ 已將本群組設定為服務員群組")
 
 def _cmd_list(chat_id):
     print("DEBUG: _cmd_list 被呼叫")
@@ -631,26 +616,23 @@ def _pending_reserve_wait_name(user_id, text, pending):
     group_chat = pending.get("group_chat")
     name_input = text.strip()
 
-    path = ensure_today_file()
-    data = load_json_file(path)
-    shift = find_shift(data.get("shifts", []), hhmm)
-    if not shift:
-        send_message(group_chat, f"⚠️ 時段 {hhmm} 不存在或已過期。")
-        clear_pending_for(user_id)
-        return
+    def callback(data):
+        shift = find_shift(data.get("shifts", []), hhmm)
+        if not shift:
+            send_message(group_chat, f"⚠️ 時段 {hhmm} 不存在或已過期。")
+            return
 
-    used = len(shift.get("bookings", [])) + len([x for x in shift.get("in_progress", []) if not str(x).endswith("(候補)")])
-    limit = shift.get("limit", 1)
-    if used >= limit:
-        send_message(group_chat, f"⚠️ {hhmm} 已滿額，無法預約。")
-        clear_pending_for(user_id)
-        return
+        used = len(shift.get("bookings", [])) + len([x for x in shift.get("in_progress", []) if not str(x).endswith("(候補)")])
+        limit = shift.get("limit", 1)
+        if used >= limit:
+            send_message(group_chat, f"⚠️ {hhmm} 已滿額，無法預約。")
+            return
 
-    unique_name = generate_unique_name(shift.get("bookings", []), name_input)
-    shift.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
-    save_json_file(path, data)
+        unique_name = generate_unique_name(shift.get("bookings", []), name_input)
+        shift.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
+        send_message(group_chat, f"✅ {unique_name} 已預約 {hhmm}")
 
-    send_message(group_chat, f"✅ {unique_name} 已預約 {hhmm}")
+    safe_modify_today_file(callback)
 
     buttons = [
         [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
@@ -658,6 +640,7 @@ def _pending_reserve_wait_name(user_id, text, pending):
     ]
     broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
     clear_pending_for(user_id)
+
 
 # 客到輸入金額
 def _pending_arrive_wait_amount(user_id, text, pending):
@@ -672,28 +655,25 @@ def _pending_arrive_wait_amount(user_id, text, pending):
         send_message(group_chat, "⚠️ 金額格式錯誤，請輸入數字")
         return
 
-    path = ensure_today_file()
-    data = load_json_file(path)
-    shift = find_shift(data.get("shifts", []), hhmm)
-    if not shift:
-        send_message(group_chat, f"⚠️ 找不到時段 {hhmm}")
-        clear_pending_for(user_id)
-        return
+    def callback(data):
+        shift = find_shift(data.get("shifts", []), hhmm)
+        if not shift:
+            send_message(group_chat, f"⚠️ 找不到時段 {hhmm}")
+            return
 
-    booking = next((b for b in shift.get("bookings", []) if b.get("name") == name and b.get("chat_id") == group_chat), None)
-    if booking:
-        shift.setdefault("in_progress", []).append({"name": name, "amount": amount})
-        shift["bookings"] = [b for b in shift.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == group_chat)]
-        save_json_file(path, data)
+        booking = next((b for b in shift.get("bookings", []) if b.get("name") == name and b.get("chat_id") == group_chat), None)
+        if booking:
+            shift.setdefault("in_progress", []).append({"name": name, "amount": amount})
+            shift["bookings"] = [b for b in shift.get("bookings", []) if not (b.get("name") == name and b.get("chat_id") == group_chat)]
+            send_message(group_chat, f"✅ {hhmm} {name} 已客到，金額：{amount}")
 
-        send_message(group_chat, f"✅ {hhmm} {name} 已客到，金額：{amount}")
+            staff_message = f"🙋‍♀️ 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
+            staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
+            broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
+        else:
+            send_message(group_chat, f"⚠️ 找不到預約 {name} 或已被移除")
 
-        staff_message = f"🙋‍♀️ 客到通知\n時間：{hhmm}\n業務名：{name}\n金額：{amount}"
-        staff_buttons = [[{"text": "上", "callback_data": f"staff_up|{hhmm}|{name}|{group_chat}"}]]
-        broadcast_to_groups(staff_message, group_type="staff", buttons=staff_buttons)
-
-    else:
-        send_message(group_chat, f"⚠️ 找不到預約 {name} 或已被移除")
+    safe_modify_today_file(callback)
     clear_pending_for(user_id)
 
 # 輸入客資    
@@ -801,63 +781,58 @@ def _pending_modify_wait_name(user_id, text, pending):
     group_chat = pending.get("group_chat")
     new_name_input = text.strip()
 
-    path = ensure_today_file()
-    data = load_json_file(path)
+    def callback(data):
+        old_shift = find_shift(data.get("shifts", []), old_hhmm)
+        if not old_shift:
+            send_message(group_chat, f"⚠️ 原時段 {old_hhmm} 不存在。")
+            return
 
-    old_shift = find_shift(data.get("shifts", []), old_hhmm)
-    if not old_shift:
-        send_message(group_chat, f"⚠️ 原時段 {old_hhmm} 不存在。")
-        clear_pending_for(user_id)
-        return
+        booking = next((b for b in old_shift.get("bookings", []) if b.get("name") == old_name and b.get("chat_id") == group_chat), None)
+        if not booking:
+            send_message(group_chat, f"⚠️ 找不到 {old_hhmm} 的預約 {old_name}。")
+            return
 
-    booking = next((b for b in old_shift.get("bookings", []) if b.get("name") == old_name and b.get("chat_id") == group_chat), None)
-    if not booking:
-        send_message(group_chat, f"⚠️ 找不到 {old_hhmm} 的預約 {old_name}。")
-        clear_pending_for(user_id)
-        return
+        new_shift = find_shift(data.get("shifts", []), new_hhmm)
+        if not new_shift:
+            send_message(group_chat, f"⚠️ 新時段 {new_hhmm} 不存在。")
+            return
 
-    new_shift = find_shift(data.get("shifts", []), new_hhmm)
-    if not new_shift:
-        send_message(group_chat, f"⚠️ 新時段 {new_hhmm} 不存在。")
-        clear_pending_for(user_id)
-        return
+        used_new = len(new_shift.get("bookings", [])) + len([x for x in new_shift.get("in_progress", []) if not str(x).endswith("(候補)")])
+        if used_new >= new_shift.get("limit", 1):
+            send_message(group_chat, f"⚠️ {new_hhmm} 已滿額，無法修改。")
+            return
 
-    used_new = len(new_shift.get("bookings", [])) + len([x for x in new_shift.get("in_progress", []) if not str(x).endswith("(候補)")])
-    if used_new >= new_shift.get("limit", 1):
-        send_message(group_chat, f"⚠️ {new_hhmm} 已滿額，無法修改。")
-        clear_pending_for(user_id)
-        return
+        old_shift["bookings"] = [b for b in old_shift.get("bookings", []) if not (b.get("name") == old_name and b.get("chat_id") == group_chat)]
+        unique_name = generate_unique_name(new_shift.get("bookings", []), new_name_input)
+        new_shift.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
+        send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
 
-    old_shift["bookings"] = [b for b in old_shift.get("bookings", []) if not (b.get("name") == old_name and b.get("chat_id") == group_chat)]
-    unique_name = generate_unique_name(new_shift.get("bookings", []), new_name_input)
-    new_shift.setdefault("bookings", []).append({"name": unique_name, "chat_id": group_chat})
-    save_json_file(path, data)
+    safe_modify_today_file(callback)
 
     buttons = [
         [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
         [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
     ]
     broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
-    if group_chat:
-        send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
     clear_pending_for(user_id)
+
 
 # 雙人服務
 def _pending_double_wait_second(user_id, text, pending):
     hhmm = pending["hhmm"]
-    business_name = pending["business_name"]
-    business_chat_id = pending["business_chat_id"]
     first_staff = pending["first_staff"]
-
     second_staff = text.strip()
 
-    double_staffs[hhmm] = [first_staff, second_staff]
-    staff_list = "、".join(double_staffs[hhmm])
+    with double_lock:
+        double_staffs[hhmm] = [first_staff, second_staff]
+        staff_list = "、".join(double_staffs[hhmm])
 
+    business_chat_id = pending.get("business_chat_id")
     if business_chat_id:
         send_message(int(business_chat_id), f"👥 雙人服務更新：{staff_list}")
     clear_pending_for(user_id)
     return {"ok": True}
+
 # -------------------------------
 # 修正客資
 # -------------------------------
@@ -915,36 +890,31 @@ def handle_staff_up(user_id, chat_id, data, callback_id):
         answer_callback(callback_id, "⚠️ callback 資料錯誤")
         return
 
-    path = ensure_today_file()
-    data_json = load_json_file(path)
+    def callback_func(data_json):
+        shift = find_shift(data_json.get("shifts", []), hhmm)
+        if not shift:
+            answer_callback(callback_id, f"⚠️ 找不到時段 {hhmm}")
+            return
 
-    # 找出該時段
-    shift = find_shift(data_json.get("shifts", []), hhmm)
-    if not shift:
-        answer_callback(callback_id, f"⚠️ 找不到時段 {hhmm}")
-        return
+        removed_item = None
+        in_progress = shift.get("in_progress", [])
+        for i, item in enumerate(in_progress):
+            if isinstance(item, dict) and item.get("name") == name:
+                removed_item = in_progress.pop(i)
+                break
+            elif str(item) == name:
+                removed_item = in_progress.pop(i)
+                break
 
-    # 移除 in_progress 中的客人
-    removed_item = None
-    in_progress = shift.get("in_progress", [])
-    for i, item in enumerate(in_progress):
-        if isinstance(item, dict) and item.get("name") == name:
-            removed_item = in_progress.pop(i)
-            break
-        elif str(item) == name:
-            removed_item = in_progress.pop(i)
-            break
+        shift["bookings"] = [
+            b for b in shift.get("bookings", [])
+            if (isinstance(b, dict) and b.get("name") != name) or b == name
+        ]
 
-    # 確保 bookings 中也不再出現（防止列表殘留）
-    shift["bookings"] = [
-        b for b in shift.get("bookings", [])
-        if (isinstance(b, dict) and b.get("name") != name) or b == name
-    ]
+        if removed_item:
+            print(f"DEBUG: 已刪除 {hhmm} {name} 從 in_progress")
 
-    if removed_item:
-        save_json_file(path, data_json)
-        print(f"DEBUG: 已刪除 {hhmm} {name} 從 in_progress")  # 可確認
-    # 回覆 callback，完成操作
+    safe_modify_today_file(callback_func)
     answer_callback(callback_id)
 
    
@@ -1345,10 +1315,3 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
-
-
-
-
-
-
-
