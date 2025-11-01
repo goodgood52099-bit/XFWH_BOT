@@ -209,11 +209,14 @@ def answer_callback(callback_id, text=None, show_alert=False):
     return send_request("answerCallbackQuery", payload)
 
 
-def broadcast_to_groups(message, group_type="all", buttons=None):
-    for chat_id, info in GROUPS.items():
-        if group_type == "business_only" and info.get("type") != "business":
-            continue  # 跳過非業務群
-        send_message(chat_id, message, buttons=buttons)
+def broadcast_to_groups(message, group_type=None, buttons=None):
+    gids = get_group_ids_by_type(group_type)
+    for gid in gids:
+        try:
+            send_message(gid, message, buttons=buttons)
+        except Exception:
+            traceback.print_exc()
+
 
 # -------------------------------
 # 生成最新時段列表（文字）
@@ -601,7 +604,7 @@ def _pending_reserve_wait_name(user_id, text, pending):
         [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
         [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
     ]
-    broadcast_to_groups(generate_latest_shift_list(), group_type="business_only", buttons=buttons)
+    broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
     clear_pending_for(user_id)
 
 # 客到輸入金額
@@ -782,7 +785,7 @@ def _pending_modify_wait_name(user_id, text, pending):
         [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
         [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
     ]
-    broadcast_to_groups(generate_latest_shift_list(), group_type="business_only", buttons=buttons)
+    broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
     if group_chat:
         send_message(group_chat, f"✅ 已修改：{old_hhmm} {old_name} → {new_hhmm} {unique_name}")
     clear_pending_for(user_id)
@@ -1053,7 +1056,7 @@ def webhook():
                     [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
                     [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
                 ]
-                broadcast_to_groups(generate_latest_shift_list(), group_type="business_only", buttons=buttons)
+                broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
                 return respond(f"✅ 已取消 {hhmm} {name} 的預約")
 
             # -------- Cancel / No-op --------
@@ -1220,7 +1223,7 @@ def auto_announce():
                     [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
                     [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
                 ]
-                broadcast_to_groups(generate_latest_shift_list(), group_type="business_only", buttons=buttons)
+                broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
             except:
                 traceback.print_exc()
             time.sleep(60)
@@ -1274,22 +1277,3 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
