@@ -246,6 +246,18 @@ def safe_float(text):
 
 def get_double_staff_key(hhmm, business_name):
     return f"{hhmm}|{business_name}"
+    
+def normalize_shift_data(data):
+    # 確保每個 shift 的 bookings/in_progress 是 list
+    for s in data.get("shifts", []):
+        if not isinstance(s.get("bookings"), list):
+            s["bookings"] = []
+        if not isinstance(s.get("in_progress"), list):
+            s["in_progress"] = []
+    # 確保候補是 list
+    if not isinstance(data.get("候補"), list):
+        data["候補"] = []
+    return data
 
 # aliases for clarity (wrap DataManager / ShiftManager calls used in old code)
 def get_pending_for(user_id): return data_manager.get_pending(user_id)
@@ -282,7 +294,7 @@ threading.Thread(target=pending_cleaner_thread, daemon=True).start()
 def handle_admin_text(chat_id, text):
     path = ensure_today_file()
     data = load_json_file(path)
-
+    data = normalize_shift_data(data)
     if text.startswith("/addshift"):
         parts = text.split()
         if len(parts) < 3:
@@ -437,6 +449,7 @@ def _reserve_wait_name(user_id, chat_id, text, pending):
     name_input = text.strip()
     path = ensure_today_file()
     data = load_json_file(path)
+    data = normalize_shift_data(data)
     s = find_shift(data["shifts"], hhmm)
     if not s or shift_is_full(s):
         bot.send_message(group_chat, f"⚠️ {hhmm} 不存在或已滿額")
@@ -461,6 +474,7 @@ def _arrive_wait_amount(user_id, chat_id, text, pending):
         return False
     path = ensure_today_file()
     data = load_json_file(path)
+    data = normalize_shift_data(data)
     s = find_shift(data["shifts"], hhmm)
     booking = next((b for b in s.get("bookings", []) if b.get("name")==name and b.get("chat_id")==group_chat), None)
     if not booking:
@@ -525,6 +539,7 @@ def _modify_wait_name(user_id, chat_id, text, pending):
     old_hhmm, old_name, new_hhmm, group_chat = pending["old_hhmm"], pending["old_name"], pending["new_hhmm"], pending["group_chat"]
     path = ensure_today_file()
     data = load_json_file(path)
+    data = normalize_shift_data(data)
     old_shift = find_shift(data["shifts"], old_hhmm)
     new_shift = find_shift(data["shifts"], new_hhmm)
     if not old_shift or not new_shift or shift_is_full(new_shift):
@@ -546,6 +561,7 @@ def _modify_wait_name(user_id, chat_id, text, pending):
 def handle_main(user_id, chat_id, action, callback_id):
     path = ensure_today_file()
     data = load_json_file(path)
+    data = normalize_shift_data(data)
 
     def reply(text, buttons=None):
         bot.send_message(chat_id, text, buttons=buttons)
@@ -689,6 +705,7 @@ def handle_callback_query(cq):
 def handle_modify_pick(user_id, chat_id, old_hhmm, old_name):
     path = ensure_today_file()
     data = load_json_file(path)
+    data = normalize_shift_data(data)
     shifts = [s for s in data.get("shifts", []) if shift_manager.is_future_time(s.get("time",""))]
     rows = []
     row = []
@@ -704,6 +721,7 @@ def handle_modify_pick(user_id, chat_id, old_hhmm, old_name):
 def handle_confirm_cancel(chat_id, user_id, hhmm, name, callback_id):
     path = ensure_today_file()
     data = load_json_file(path)
+    data = normalize_shift_data(data)
     s = find_shift(data.get("shifts", []), hhmm)
     if not s:
         return bot.answer_callback(callback_id, "找不到該時段")
@@ -895,3 +913,4 @@ def webhook():
 if __name__ == "__main__":
     start_background_threads()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
