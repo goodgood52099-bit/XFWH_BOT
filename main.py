@@ -167,12 +167,13 @@ def send_request(method, payload):
     return requests.post(API_URL + method, json=payload).json()
 
 
-def send_message(chat_id, text, buttons=None, parse_mode="Markdown"):
+def send_message(chat_id, text, buttons=None, parse_mode=None):
     payload = {
         "chat_id": chat_id,
-        "text": text,
-        "parse_mode": parse_mode
+        "text": text
     }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     if buttons:
         payload["reply_markup"] = {"inline_keyboard": buttons}
 
@@ -1058,6 +1059,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
