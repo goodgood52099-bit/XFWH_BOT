@@ -945,16 +945,37 @@ def webhook():
                 if action in ("arrive", "modify", "cancel"):
                     bookings, _ = get_bookings_for_group()
                     if not bookings:
-                        return respond(f"目前沒有可{action}的預約。")
+                        if action == "arrive":
+                            return respond("⚠️ 目前沒有可報到的預約。")
+                        elif action == "modify":
+                            return respond("⚠️ 目前沒有可修改的預約。")
+                        elif action == "cancel":
+                            return respond("⚠️ 目前沒有可取消的預約。")
 
                     btns = []
                     for bk in bookings:
-                        cb_prefix = f"{action}_pick" if action != "arrive" else "arrive_select"
-                        btns.append({"text": f"{bk['time']} {bk['name']}", "callback_data": f"{cb_prefix}|{bk['time']}|{bk['name']}"})
+                        if action == "arrive":
+                            cb_prefix = "arrive_select"
+                            btn_text = f"{bk['time']} {bk['name']}"
+                        elif action == "modify":
+                            cb_prefix = "modify_pick"
+                            btn_text = f"{bk['time']} {bk['name']}"
+                        elif action == "cancel":
+                            cb_prefix = "cancel_pick"
+                            btn_text = f"{bk['time']} {bk['name']}"
+                        btns.append({"text": btn_text, "callback_data": f"{cb_prefix}|{bk['time']}|{bk['name']}"})
+
                     chunk_size = 2 if action == "arrive" else 1
                     rows = chunk_list(btns, chunk_size)
                     rows.append([{"text": "取消", "callback_data": "cancel_flow"}])
-                    return respond(f"請選擇要{action}的預約：", buttons=rows)
+
+                    if action == "arrive":
+                        return respond("📋 請選擇要報到的預約：", buttons=rows)
+                    elif action == "modify":
+                        return respond("✏️ 請選擇要修改的預約：", buttons=rows)
+                    elif action == "cancel":
+                        return respond("❌ 請選擇要取消的預約：", buttons=rows)
+
 
             # -------- Reserve pick --------
             if data and data.startswith("reserve_pick|"):
@@ -1241,6 +1262,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
