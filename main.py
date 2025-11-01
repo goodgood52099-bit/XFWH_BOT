@@ -32,8 +32,21 @@ TZ = ZoneInfo("Asia/Taipei")  # 台灣時區
 double_staffs = {}  # 用於紀錄雙人服務
 asked_shifts = set()
 
+# -------------------------------
 # 已使用的服務員群按鈕（防止重複點擊）
+# -------------------------------
 USED_STAFF_BUTTONS = set()
+
+def staff_button_used(callback_data):
+    """檢查該 callback 是否已使用過"""
+    if callback_data in USED_STAFF_BUTTONS:
+        return True
+    USED_STAFF_BUTTONS.add(callback_data)
+    return False
+
+def clear_used_staff_buttons():
+    """清空已使用按鈕（每天重置）"""
+    USED_STAFF_BUTTONS.clear()
 
 # -------------------------------
 # JSON 讀寫鎖
@@ -146,11 +159,16 @@ def save_json_file(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-
+# -------------------------------
+# 每日排班檔生成
+# -------------------------------
 def ensure_today_file(workers=3):
     today = datetime.now(TZ).date().isoformat()
     path = data_path_for(today)
     now = datetime.now(TZ)
+
+    # 每天生成新檔時清空已使用按鈕
+    clear_used_staff_buttons()
 
     if os.path.exists(path):
         data = load_json_file(path)
@@ -172,7 +190,6 @@ def ensure_today_file(workers=3):
         save_json_file(path, {"date": today, "shifts": shifts, "候補": []})
 
     return path
-
 
 def find_shift(shifts, hhmm):
     return next((s for s in shifts if s.get("time") == hhmm), None)
@@ -294,12 +311,6 @@ def generate_unique_name(bookings, base_name):
     while f"{base_name}({idx})" in existing:
         idx += 1
     return f"{base_name}({idx})"
-def staff_button_used(callback_data):
-    """檢查該 callback 是否已使用過"""
-    if callback_data in USED_STAFF_BUTTONS:
-        return True
-    USED_STAFF_BUTTONS.add(callback_data)
-    return False
 
 
 # -------------------------------
@@ -1305,4 +1316,5 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
