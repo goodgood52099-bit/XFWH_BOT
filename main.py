@@ -24,7 +24,6 @@ DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 PENDING_FILE = os.path.join(DATA_DIR, "pending.json")
-GROUP_FILE = os.path.join(DATA_DIR, "groups.json")
 
 app = Flask(__name__)
 ADMIN_IDS = [7236880214, 7807558825, 7502175264]  # 管理員 Telegram ID，自行修改
@@ -32,6 +31,10 @@ TZ = ZoneInfo("Asia/Taipei")  # 台灣時區
 
 double_staffs = {}  # 用於紀錄雙人服務
 asked_shifts = set()
+
+# 已使用的服務員群按鈕（防止重複點擊）
+USED_STAFF_BUTTONS = set()
+
 # -------------------------------
 # JSON 讀寫鎖
 # -------------------------------
@@ -86,32 +89,39 @@ def has_pending_for(user_id):
 # -------------------------------
 # 群組管理
 # -------------------------------
-def load_groups():
-    if os.path.exists(GROUP_FILE):
-        with open(GROUP_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+GROUP_FILE = os.path.join(DATA_DIR, "groups.json")
+STAFF_GROUP_ID = -123456789  # 固定服務員群組ID
 
+def load_groups():
+    """載入群組資料，確保固定服務員群組存在"""
+    groups = load_json_file(GROUP_FILE, default=[])
+    
+    # 確保固定服務員群組存在
+    if not any(g["id"] == STAFF_GROUP_ID for g in groups):
+        groups.append({"id": STAFF_GROUP_ID, "type": "staff"})
+        save_groups(groups)
+    
+    return groups
 
 def save_groups(groups):
-    with open(GROUP_FILE, "w", encoding="utf-8") as f:
-        json.dump(groups, f, ensure_ascii=False, indent=2)
+    """存檔"""
+    save_json_file(GROUP_FILE, groups)
 
-
-def add_group(chat_id, chat_type, group_role="business"):
+def add_group(chat_id, chat_type):
+    """加入新群組，自動判斷群組角色"""
     groups = load_groups()
-    for g in groups:
-        if g["id"] == chat_id:
-            g["type"] = group_role
-            save_groups(groups)
-            return
+
+    # 如果群組已存在就直接返回
+    if any(g["id"] == chat_id for g in groups):
+        return
 
     if chat_type in ["group", "supergroup"]:
+        group_role = "staff" if chat_id == STAFF_GROUP_ID else "business"
         groups.append({"id": chat_id, "type": group_role})
         save_groups(groups)
 
-
 def get_group_ids_by_type(group_type=None):
+    """取得指定角色的群組ID"""
     groups = load_groups()
     if group_type:
         return [g["id"] for g in groups if g.get("type") == group_type]
@@ -284,6 +294,12 @@ def generate_unique_name(bookings, base_name):
     while f"{base_name}({idx})" in existing:
         idx += 1
     return f"{base_name}({idx})"
+def staff_button_used(callback_data):
+    """檢查該 callback 是否已使用過"""
+    if callback_data in USED_STAFF_BUTTONS:
+        return True
+    USED_STAFF_BUTTONS.add(callback_data)
+    return False
 
 
 # -------------------------------
@@ -346,7 +362,10 @@ def handle_text_message(msg):
     if text == "/list":
         print("DEBUG: 執行 /list")
         return _cmd_list(chat_id)
-
+    # 如果輸入 /id，回傳群組 ID
+    if text == "/id":
+        send_message(chat_id, f"這個群組的 ID 是：{chat_id}")
+        return
     # 3️⃣ 管理員指令
     if user_id in ADMIN_IDS:
         if text.startswith("/addshift"):
@@ -1064,8 +1083,13 @@ def webhook():
                 return answer_callback(callback_id, "已取消")
 
             # -------- Staff / Business flow --------
+           
             # staff_up -> 通知業務 + 顯示服務員按鈕
             if data and data.startswith("staff_up|"):
+                if staff_button_used(data):
+                    answer_callback(callback_id, "⚠️ 此按鈕已被使用過。")
+                    return {"ok": True}
+
                 _, hhmm, name, business_chat_id = data.split("|", 3)
                 send_message(int(business_chat_id), f"⬆️ 上 {hhmm} {name}")
 
@@ -1076,9 +1100,13 @@ def webhook():
                 send_message(chat_id, f"✅ 已通知業務 {name}", buttons=staff_buttons)
                 answer_callback(callback_id)
                 return {"ok": True}
-
+                
             # 服務員 -> 輸入客資
             if data and data.startswith("input_client|"):
+                if staff_button_used(data):
+                    answer_callback(callback_id, "⚠️ 此按鈕已被使用過。")
+                    return {"ok": True}
+
                 if has_pending_for(user_id):
                     answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
                     return {"ok": True}
@@ -1097,10 +1125,10 @@ def webhook():
 
             # 服務員 -> 未消
             if data and data.startswith("not_consumed|"):
-                if has_pending_for(user_id):
-                    answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
+                if staff_button_used(data):
+                    answer_callback(callback_id, "⚠️ 此按鈕已被使用過。")
                     return {"ok": True}
-                    
+
                 _, hhmm, name, business_chat_id = data.split("|", 3)
                 set_pending_for(user_id, {
                     "action": "not_consumed_wait_reason",
@@ -1115,8 +1143,8 @@ def webhook():
 
             # 雙人服務（按鈕觸發）
             if data and data.startswith("double|"):
-                if has_pending_for(user_id):
-                    answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
+                if staff_button_used(data):
+                    answer_callback(callback_id, "⚠️ 此按鈕已被使用過。")
                     return {"ok": True}
 
                 try:
@@ -1144,8 +1172,8 @@ def webhook():
 
             # 完成服務
             if data and data.startswith("complete|"):
-                if has_pending_for(user_id):
-                    answer_callback(callback_id, "⚠️ 你已有進行中的操作，請先完成。")
+                if staff_button_used(data):
+                    answer_callback(callback_id, "⚠️ 此按鈕已被使用過。")
                     return {"ok": True}
 
                 try:
@@ -1277,3 +1305,4 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
