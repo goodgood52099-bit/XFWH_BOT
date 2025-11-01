@@ -695,7 +695,6 @@ def _pending_complete_wait_amount(user_id, text, pending):
         return
 
     msg = f"✅ 完成服務通知\n{hhmm} {business_name}\n服務人員: {staff_str}\n金額: {amount}"
-    send_message(user_id, msg)
     send_message(int(business_chat_id), msg)
     clear_pending_for(user_id)
     return {"ok": True}
@@ -1242,6 +1241,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
