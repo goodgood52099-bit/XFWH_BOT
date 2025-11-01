@@ -943,7 +943,7 @@ def handle_staff_up(user_id, chat_id, data, callback_id):
 
     if removed_item:
         save_json_file(path, data_json)
-
+        print(f"DEBUG: 已刪除 {hhmm} {name} 從 in_progress")  # 可確認
     # 回覆 callback，完成操作
     answer_callback(callback_id)
 
@@ -1340,6 +1340,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
