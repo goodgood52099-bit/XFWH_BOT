@@ -1023,27 +1023,13 @@ def ask_arrivals_thread():
 # -------------------------------
 threading.Thread(target=auto_announce, daemon=True).start()
 threading.Thread(target=ask_arrivals_thread, daemon=True).start()
-# -------------------------------
-# Flask Webhook 入口
-# -------------------------------
-@app.route("/", methods=["POST"])
-def webhook():
-    try:
-        update = request.get_json(force=True)
-        print("DEBUG webhook 收到:", update)
-
-        if "message" in update:
-            handle_text_message(update["message"])  # 用正式版
-
-    except Exception:
-        traceback.print_exc()
-    return "OK"
 
 # -------------------------------
 # 啟動 Flask
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
