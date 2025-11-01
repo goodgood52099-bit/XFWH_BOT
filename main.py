@@ -642,7 +642,7 @@ def _pending_input_client(user_id, text, pending):
             {"text": "修正", "callback_data": f"fix|{hhmm}|{business_name}|{business_chat_id}"}
         ]
     ]
-    send_message(chat_id, msg_business, buttons=staff_buttons)
+    send_message(int(chat_id), msg_business, buttons=staff_buttons)
     clear_pending_for(user_id)
     return {"ok": True}
 
@@ -1059,6 +1059,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
