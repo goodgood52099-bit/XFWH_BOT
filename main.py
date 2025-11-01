@@ -289,18 +289,21 @@ def handle_text_message(msg):
 
     pending = get_pending_for(user_id)
     print(f"DEBUG: user_id={user_id}, pending={pending}, text='{text}'")
-    # ----------------- 自動清理過期 pending（3 分鐘） -----------------
-    try:
-        pending_data = load_json_file("data/pending.json")
-        now = time.time()
-        expired = [uid for uid, p in pending_data.items() if now - p.get("created_at", 0) > 180]
-        for uid in expired:
-            del pending_data[uid]
-        if expired:
-            save_json_file("data/pending.json", pending_data)
-            print(f"🧹 清除過期 pending: {expired}")
-    except Exception as e:
-        print("❌ pending 自動清理錯誤:", e)
+def pending_cleaner_thread():
+    while True:
+        try:
+            now = time.time()
+            pending_data = load_pending()
+            expired = [uid for uid, p in pending_data.items() if now - p.get("created_at", 0) > 180]
+            for uid in expired:
+                del pending_data[uid]
+            if expired:
+                save_pending(pending_data)
+                print(f"🧹 清除過期 pending: {expired}")
+        except Exception as e:
+            print("❌ pending 自動清理錯誤:", e)
+        time.sleep(60)
+    
     # ----------------- 新群組自動記錄 -----------------
     add_group(chat_id, chat_type)      
     # ----------------- pending 處理 -----------------
@@ -450,27 +453,28 @@ def handle_admin_text(chat_id, text):
 # -------------------------------
 def handle_pending_action(user_id, chat_id, text, pending):
     action = pending.get("action")
+    success = False
     try:
         if action == "reserve_wait_name":
-            handle_reserve_wait_name(user_id, chat_id, text, pending)
+            success = handle_reserve_wait_name(user_id, chat_id, text, pending)
         elif action == "arrive_wait_amount":
-            handle_arrive_wait_amount(user_id, chat_id, text, pending)
+            success = handle_arrive_wait_amount(user_id, chat_id, text, pending)
         elif action == "input_client":
-            handle_input_client(user_id, chat_id, text, pending)
+            success = handle_input_client(user_id, chat_id, text, pending)
         elif action == "double_wait_second":
-            handle_double_wait_second(user_id, chat_id, text, pending)
+            success = handle_double_wait_second(user_id, chat_id, text, pending)
         elif action == "complete_wait_amount":
-            handle_complete_wait_amount(user_id, chat_id, text, pending)
+            success = handle_complete_wait_amount(user_id, chat_id, text, pending)
         elif action == "not_consumed_wait_reason":
-            handle_not_consumed_wait_reason(user_id, chat_id, text, pending)
+            success = handle_not_consumed_wait_reason(user_id, chat_id, text, pending)
         elif action == "modify_wait_name":
-            handle_modify_wait_name(user_id, chat_id, text, pending)
+            success = handle_modify_wait_name(user_id, chat_id, text, pending)
         else:
             send_message(chat_id, "⚠️ 未知動作，已清除暫存。")
+            success = True
     except Exception:
         traceback.print_exc()
         send_message(chat_id, f"❌ 執行動作 {action} 時發生錯誤")
-        success = False
     if success:
         clear_pending_for(user_id)
 
@@ -658,7 +662,7 @@ def handle_main(user_id, chat_id, action, callback_id):
         rows = []
         row = []
         for s in shifts:
-            used = len(s.get("bookings", [])) + len([x for x in s.get("in_main.pyprogress", []) if not str(x).endswith("(候補)")])
+            used = len(s.get("bookings", [])) + len([x for x in s.get("in_progress", []) if not str(x).endswith("(候補)")])
             limit = s.get("limit", 1)
             if used < limit:
                 btn = {"text": f"{s['time']} ({limit - used})", "callback_data": f"reserve_pick|{s['time']}"}
@@ -807,7 +811,6 @@ def handle_staff_callback(user_id, chat_id, action, parts, callback_id):
         _, hhmm, business_name, business_chat_id = parts
         first_staff = get_staff_name(user_id)
         key = f"{hhmm}|{business_name}"
-        # 檢查是否已有人按過第一位
         if key in double_staffs:
             return reply(f"⚠️ {hhmm} {business_name} 已有人選擇第一位服務員：{double_staffs[key][0]}")
         pending_data = {
@@ -1030,6 +1033,8 @@ def ask_arrivals_thread():
 # -------------------------------
 threading.Thread(target=auto_announce, daemon=True).start()
 threading.Thread(target=ask_arrivals_thread, daemon=True).start()
+threading.Thread(target=pending_cleaner_thread, daemon=True).start()
+
 # -------------------------------
 # Flask Webhook 入口
 # -------------------------------
@@ -1054,3 +1059,4 @@ def webhook():
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
