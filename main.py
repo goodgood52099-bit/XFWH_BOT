@@ -32,7 +32,22 @@ TZ = ZoneInfo("Asia/Taipei")  # 台灣時區
 
 double_staffs = {}  # 用於紀錄雙人服務
 asked_shifts = set()
+# -------------------------------
+# JSON 讀寫鎖
+# -------------------------------
+json_lock = threading.Lock()
 
+def save_json_file(path, data):
+    with json_lock:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+def load_json_file(path, default=None):
+    with json_lock:
+        if not os.path.exists(path):
+            return default or {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 # -------------------------------
 # pending 狀態（persist 到檔案，key = user_id 字串）
 # -------------------------------
@@ -1259,6 +1274,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
