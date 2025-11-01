@@ -481,7 +481,9 @@ def _cmd_list(chat_id):
         [{"text": "預約", "callback_data": "main|reserve"}, {"text": "客到", "callback_data": "main|arrive"}],
         [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
     ]
-    send_message(chat_id, shift_text, buttons=buttons)
+    # parse_mode=None 避免 emoji 與 Markdown 解析錯誤
+    send_message(chat_id, shift_text, buttons=buttons, parse_mode=None)
+
 # -------------------------------
 # Pending 分流
 # -------------------------------
@@ -1027,4 +1029,5 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
