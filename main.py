@@ -622,6 +622,16 @@ def _pending_arrive_wait_amount(user_id, text, pending):
 # 輸入客資    
 def _pending_input_client(user_id, text, pending):
     chat_id = pending.get("chat_id")
+    business_chat_id = pending.get("business_chat_id")
+
+    # 防呆檢查
+    if chat_id is None or business_chat_id is None:
+        print(f"❌ DEBUG: pending 資料錯誤: {pending}")
+        return {"ok": False, "error": "chat_id or business_chat_id is None"}
+
+    # 確保是整數
+    chat_id = int(chat_id)
+    business_chat_id = int(business_chat_id)
     try:
         client_name, age, staff_name, amount = text.split()
     except ValueError:
@@ -633,7 +643,7 @@ def _pending_input_client(user_id, text, pending):
     business_chat_id = pending["business_chat_id"]
 
     msg_business = f"📌 客\n{hhmm} {client_name}{age}  {business_name}{amount}\n服務人員: {staff_name}"
-    send_message(int(business_chat_id), msg_business)
+    send_message(int(business_chat_id), msg_business, parse_mode="HTML")
 
     staff_buttons = [
         [
@@ -642,7 +652,7 @@ def _pending_input_client(user_id, text, pending):
             {"text": "修正", "callback_data": f"fix|{hhmm}|{business_name}|{business_chat_id}"}
         ]
     ]
-    send_message(int(chat_id), msg_business, buttons=staff_buttons)
+    send_message(int(chat_id), msg_business, buttons=staff_buttons, parse_mode="HTML")
     clear_pending_for(user_id)
     return {"ok": True}
 
@@ -674,12 +684,18 @@ def _pending_not_consumed_wait_reason(user_id, text, pending):
     business_chat_id = pending["business_chat_id"]
     reason = text.strip()
 
+    # 發給服務員群（如果 chat_id 存在）
+    staff_chat_id = pending.get("chat_id")
+    if staff_chat_id:
+        send_message(int(staff_chat_id), f"掰掰謝謝光臨!!")  # 發給服務員群確認
+
+    # 發給業務群
     msg = f"⚠️ 未消: {name} {reason}"
-    send_message(user_id, f"掰掰謝謝光臨!!")  # 可發給服務員群確認
-    send_message(int(business_chat_id), msg)  # 發給業務群
+    send_message(int(business_chat_id), msg)
 
     clear_pending_for(user_id)
     return {"ok": True}
+
 
 # 修改預約
 def _pending_modify_wait_name(user_id, text, pending):
@@ -1059,6 +1075,7 @@ threading.Thread(target=ask_arrivals_thread, daemon=True).start()
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
