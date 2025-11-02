@@ -1,13 +1,12 @@
 import os
 import json
 import requests
+import queue
 from flask import Flask, request
 from datetime import datetime, time as dt_time
 import threading
 import time
 import traceback
-from filelock import FileLock
-
 
 try:
     from zoneinfo import ZoneInfo
@@ -37,6 +36,7 @@ asked_shifts = set()
 pending_lock = threading.Lock()
 double_lock = threading.Lock()
 staff_buttons_lock = threading.Lock()
+write_queue = queue.Queue()
 # -------------------------------
 # 已使用的服務員群按鈕（防止重複點擊）
 # -------------------------------
@@ -53,42 +53,72 @@ def clear_used_staff_buttons():
     with staff_buttons_lock:
         USED_STAFF_BUTTONS.clear()
 
+def background_writer():
+    """統一背景寫檔執行緒"""
+    while True:
+        task = write_queue.get()
+        if task is None:  # 遇到 None 可以停止執行緒
+            break
+        path, data = task
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            print(f"DEBUG: 背景寫檔完成 {path}")
+        except Exception as e:
+            print(f"ERROR: 背景寫檔失敗 {path}: {e}")
+        write_queue.task_done()
 # -------------------------------
 # pending 狀態（persist 到檔案，key = user_id 字串）
 # -------------------------------
 def load_pending():
-    lock_path = f"{PENDING_FILE}.lock"
-    with FileLock(lock_path):
-        if os.path.exists(PENDING_FILE):
-            with open(PENDING_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+    if not os.path.exists(PENDING_FILE):
+        return {}
+    try:
+        with open(PENDING_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"ERROR: 讀取 pending 檔案失敗: {e}")
         return {}
 
-def save_pending(d):
-    lock_path = f"{PENDING_FILE}.lock"
-    with FileLock(lock_path):
-        with open(PENDING_FILE, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=2)
+def save_pending(new_data):
+    """將 new_data 合併到 pending.json 再推入 queue 背景寫入"""
+    path = PENDING_FILE
+
+    # 讀取現有檔案
+    existing = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception as e:
+            print(f"WARNING: 讀取現有 pending.json 失敗: {e}")
+
+    # 合併新的資料
+    existing.update(new_data)
+
+    # 推入背景寫檔 queue
+    write_queue.put((path, existing))
+
 
 def set_pending_for(user_id, payload):
-    lock_path = f"{PENDING_FILE}.lock"
-    with FileLock(lock_path):
-        p = load_pending()
-        p[str(user_id)] = payload
-        save_pending(p)
+    save_pending({str(user_id): payload})
 
+    
 def get_pending_for(user_id):
-    lock_path = f"{PENDING_FILE}.lock"
-    with FileLock(lock_path):
-        return load_pending().get(str(user_id))
+    pending = load_pending()
+    # 合併 queue 中未寫入的 pending.json
+    for path, data in list(write_queue.queue):
+        if path == PENDING_FILE:
+            pending.update(data)
+    return pending.get(str(user_id))
+
+
 
 def clear_pending_for(user_id):
-    lock_path = f"{PENDING_FILE}.lock"
-    with FileLock(lock_path):
-        p = load_pending()
-        if str(user_id) in p:
-            del p[str(user_id)]
-            save_pending(p)
+    p = load_pending()
+    if str(user_id) in p:
+        del p[str(user_id)]
+        save_pending(p)
 
 def has_pending_for(user_id):
     return get_pending_for(user_id) is not None
@@ -96,32 +126,28 @@ def has_pending_for(user_id):
 # -------------------------------
 # 群組管理
 # -------------------------------
-group_lock = threading.Lock()
 GROUP_FILE = os.path.join(DATA_DIR, "groups.json")
 STAFF_GROUP_ID = -1003119493503
 
 def load_groups():
-    with group_lock:
-        groups = load_json_file(GROUP_FILE, default=[])
-        if not isinstance(groups, list):
-            groups = []
-        if not any(g.get("id") == STAFF_GROUP_ID for g in groups):
-            groups.append({"id": STAFF_GROUP_ID, "type": "staff"})
-            save_groups(groups)
-        return groups
+    groups = load_json_file(GROUP_FILE, default=[])
+    if not isinstance(groups, list):
+        groups = []
+    if not any(g.get("id") == STAFF_GROUP_ID for g in groups):
+        groups.append({"id": STAFF_GROUP_ID, "type": "staff"})
+        save_groups(groups)
+    return groups
 
 def save_groups(groups):
-    with group_lock:
-        save_json_file(GROUP_FILE, groups)
+    write_queue.put((GROUP_FILE, groups))
 
 def add_group(chat_id, chat_type, group_role=None):
-    with group_lock:
-        groups = load_groups()
-        if any(g.get("id") == chat_id for g in groups):
-            return
-        role = group_role or ("staff" if chat_id == STAFF_GROUP_ID else "business")
-        groups.append({"id": chat_id, "type": role})
-        save_groups(groups)
+    groups = load_groups()
+    if any(g.get("id") == chat_id for g in groups):
+        return
+    role = group_role or ("staff" if chat_id == STAFF_GROUP_ID else "business")
+    groups.append({"id": chat_id, "type": role})
+    save_groups(groups)
 
 def get_group_ids_by_type(group_type=None):
     """取得指定角色的群組ID"""
@@ -136,34 +162,39 @@ def get_group_ids_by_type(group_type=None):
 def data_path_for(day):
     return os.path.join(DATA_DIR, f"{day}.json")
 
-
 def load_json_file(path, default=None):
-    lock_path = f"{path}.lock"
-    with FileLock(lock_path):
-        if not os.path.exists(path):
-            return default or {}
+    if not os.path.exists(path):
+        return default or {}
+    try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-
+    except Exception as e:
+        print(f"ERROR: 讀取檔案失敗 {path}: {e}")
+        return default or {}
 
 def save_json_file(path, data):
-    lock_path = f"{path}.lock"
-    with FileLock(lock_path):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+    write_queue.put((path, data))  # 推入 Queue 背景寫檔
+
 # -------------------------------
 # 安全檔案修改封裝（加鎖）
 # -------------------------------
 def safe_modify_today_file(callback):
     path = ensure_today_file()
-    lock_path = f"{path}.lock"
-    with FileLock(lock_path):
-        # 讀取、修改、寫入都在同一個鎖內，保證原子性
-        data = load_json_file(path)
-        callback(data)
-        save_json_file(path, data)
 
-      
+    data = load_json_file(path)
+    # 合併 queue 中尚未寫入的資料
+    for p, qdata in list(write_queue.queue):
+        if p == path:
+            data.update(qdata)
+
+    # 執行 callback 修改資料
+    callback(data)
+
+    # 推入 queue 背景寫檔
+    write_queue.put((path, data))
+
+
+     
 # -------------------------------
 # 每日排班檔生成
 # -------------------------------
@@ -823,9 +854,8 @@ def _pending_double_wait_second(user_id, text, pending):
     first_staff = pending["first_staff"]
     second_staff = text.strip()
 
-    with double_lock:
-        double_staffs[hhmm] = [first_staff, second_staff]
-        staff_list = "、".join(double_staffs[hhmm])
+    double_staffs[hhmm] = [first_staff, second_staff]
+    staff_list = "、".join(double_staffs[hhmm])
 
     business_chat_id = pending.get("business_chat_id")
     if business_chat_id:
@@ -1262,10 +1292,12 @@ def auto_announce():
                     [{"text": "修改預約", "callback_data": "main|modify"}, {"text": "取消預約", "callback_data": "main|cancel"}],
                 ]
                 broadcast_to_groups(generate_latest_shift_list(), group_type="business", buttons=buttons)
-            except:
-                traceback.print_exc()
-            time.sleep(60)
-        time.sleep(10)
+                print(f"[AUTO ANNOUNCE] {now} 發送公告")
+            except Exception as e:
+                print(f"❌ [AUTO ANNOUNCE] 發送失敗: {e}")
+            time.sleep(60)  # 避免整點重複
+        else:
+            time.sleep(10)  # 其他時間每 10 秒檢查一次
 
 
 def ask_arrivals_thread():
@@ -1278,40 +1310,49 @@ def ask_arrivals_thread():
 
         if now.minute == 0 and key not in asked_shifts:
             path = data_path_for(today)
-            if os.path.exists(path):
-                data = load_json_file(path)
-                for s in data.get("shifts", []):
-                    if s.get("time") != current_hm:
-                        continue
-                    waiting = []
-                    groups_to_notify = set()
-                    for b in s.get("bookings", []):
-                        name = b.get("name")
-                        gid = b.get("chat_id")
-                        if name not in [x["name"] if isinstance(x, dict) else x for x in s.get("in_progress", [])]:
-                            waiting.append(name)
-                            groups_to_notify.add(gid)
-                    if waiting:
-                        names_text = "、".join(waiting)
-                        text = f"⏰ 現在是 {current_hm}\n請問預約的「{names_text}」到了嗎？\n到了請回覆：客到 {current_hm} 名稱 或使用按鈕 /list → 客到"
-                        for gid in groups_to_notify:
-                            send_message(gid, text)
-            asked_shifts.add(key)
+            try:
+                if os.path.exists(path):
+                    data = load_json_file(path)
+                    for s in data.get("shifts", []):
+                        if s.get("time") != current_hm:
+                            continue
+                        waiting = []
+                        groups_to_notify = set()
+                        for b in s.get("bookings", []):
+                            name = b.get("name")
+                            gid = b.get("chat_id")
+                            in_prog_names = [x["name"] if isinstance(x, dict) else x for x in s.get("in_progress", [])]
+                            if name not in in_prog_names:
+                                waiting.append(name)
+                                groups_to_notify.add(gid)
+                        if waiting:
+                            names_text = "、".join(waiting)
+                            text = f"⏰ 現在是 {current_hm}\n請問預約的「{names_text}」到了嗎？\n到了請回覆：客到 {current_hm} 名稱 或使用按鈕 /list → 客到"
+                            for gid in groups_to_notify:
+                                try:
+                                    send_message(gid, text)
+                                except Exception as e:
+                                    print(f"❌ [ASK ARRIVALS] 發送訊息失敗 gid={gid}: {e}")
+                    asked_shifts.add(key)
+            except Exception as e:
+                print(f"❌ [ASK ARRIVALS] 讀取檔案失敗: {e}")
 
+        # 每天 00:01 清空
         if now.hour == 0 and now.minute == 1:
             asked_shifts.clear()
+            print("[ASK ARRIVALS] 已清空今日記錄")
 
         time.sleep(10)
-
 
 # -------------------------------
 # 啟動背景執行緒
 # -------------------------------
 threading.Thread(target=auto_announce, daemon=True).start()
 threading.Thread(target=ask_arrivals_thread, daemon=True).start()
-
+threading.Thread(target=background_writer, daemon=True).start()
 # -------------------------------
 # 啟動 Flask
 # -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
