@@ -36,6 +36,7 @@ asked_shifts = set()
 pending_lock = threading.Lock()
 double_lock = threading.Lock()
 staff_buttons_lock = threading.Lock()
+file_modify_lock = threading.Lock()
 write_queue = queue.Queue()
 # -------------------------------
 # 已使用的服務員群按鈕（防止重複點擊）
@@ -181,18 +182,29 @@ def save_json_file(path, data):
 def safe_modify_today_file(callback):
     path = ensure_today_file()
 
-    data = load_json_file(path)
-    # 合併 queue 中尚未寫入的資料
-    for p, qdata in list(write_queue.queue):
-        if p == path:
-            data.update(qdata)
+    with file_modify_lock:  # 確保同一時間只有一個 callback 在修改
+        data = load_json_file(path)
 
-    # 執行 callback 修改資料
-    callback(data)
+        # 合併 queue 中尚未寫入的資料
+        for p, qdata in list(write_queue.queue):
+            if p == path:
+                # merge shifts 列表，避免覆蓋
+                merge_shifts(data.get("shifts", []), qdata.get("shifts", []))
+                # merge 候補列表
+                if "候補" in qdata:
+                    for item in qdata["候補"]:
+                        if item not in data["候補"]:
+                            data["候補"].append(item)
+                # 可以合併其他 key 的字典
+                for k, v in qdata.items():
+                    if k not in ("shifts", "候補"):
+                        data[k] = v
 
-    # 推入 queue 背景寫檔
-    write_queue.put((path, data))
+        # 執行 callback 修改資料
+        callback(data)
 
+        # 推入 queue 背景寫檔
+        write_queue.put((path, data))
 
      
 # -------------------------------
@@ -363,6 +375,21 @@ def generate_unique_name(bookings, base_name):
     while f"{base_name}({idx})" in existing:
         idx += 1
     return f"{base_name}({idx})"
+    
+def merge_shifts(original, new_shifts):
+    for new_shift in new_shifts:
+        shift = next((s for s in original if s['time'] == new_shift['time']), None)
+        if shift:
+            # 合併 bookings
+            for b in new_shift.get('bookings', []):
+                if b not in shift.get('bookings', []):
+                    shift['bookings'].append(b)
+            # 合併 in_progress
+            for ip in new_shift.get('in_progress', []):
+                if ip not in shift.get('in_progress', []):
+                    shift['in_progress'].append(ip)
+        else:
+            original.append(new_shift)
 
 
 # -------------------------------
@@ -1354,6 +1381,7 @@ if __name__ == "__main__":
     threading.Thread(target=background_writer, daemon=True).start()
     # 關閉 reloader 避免多次啟動
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), use_reloader=False)
+
 
 
 
