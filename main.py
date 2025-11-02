@@ -378,18 +378,31 @@ def generate_unique_name(bookings, base_name):
     
 def merge_shifts(original, new_shifts):
     for new_shift in new_shifts:
+        # 先確保 new_shift['time'] 是 datetime.time
+        if isinstance(new_shift.get('time'), str):
+            h, m = map(int, new_shift['time'].split(":"))
+            new_shift['time'] = dt_time(h, m)
+
+        # 找出是否已存在同時段
         shift = next((s for s in original if s['time'] == new_shift['time']), None)
+
         if shift:
-            # 合併 bookings
+            # 合併 bookings（避免重複）
             for b in new_shift.get('bookings', []):
                 if b not in shift.get('bookings', []):
-                    shift['bookings'].append(b)
-            # 合併 in_progress
+                    shift.setdefault('bookings', []).append(b)
+
+            # 合併 in_progress（避免重複）
             for ip in new_shift.get('in_progress', []):
                 if ip not in shift.get('in_progress', []):
-                    shift['in_progress'].append(ip)
+                    shift.setdefault('in_progress', []).append(ip)
         else:
+            # 新增 shift 前確保 bookings / in_progress 存在
+            new_shift.setdefault('bookings', [])
+            new_shift.setdefault('in_progress', [])
             original.append(new_shift)
+
+    return original
 
 
 # -------------------------------
@@ -1381,6 +1394,7 @@ if __name__ == "__main__":
     threading.Thread(target=background_writer, daemon=True).start()
     # 關閉 reloader 避免多次啟動
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), use_reloader=False)
+
 
 
 
