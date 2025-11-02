@@ -1345,14 +1345,15 @@ def ask_arrivals_thread():
         time.sleep(10)
 
 # -------------------------------
-# 啟動背景執行緒
-# -------------------------------
-threading.Thread(target=auto_announce, daemon=True).start()
-threading.Thread(target=ask_arrivals_thread, daemon=True).start()
-threading.Thread(target=background_writer, daemon=True).start()
-# -------------------------------
-# 啟動 Flask
+# 啟動背景執行緒 啟動 Flask
 # -------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    # 啟動背景執行緒
+    threading.Thread(target=auto_announce, daemon=True).start()
+    threading.Thread(target=ask_arrivals_thread, daemon=True).start()
+    threading.Thread(target=background_writer, daemon=True).start()
+    # 關閉 reloader 避免多次啟動
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), use_reloader=False)
+
+
 
